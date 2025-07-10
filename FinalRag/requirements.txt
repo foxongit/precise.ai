@@ -10,3 +10,6 @@ spacy
 python-dotenv
 pydantic
 supabase
+pdfplumber
+langchain_chroma
+sentence-transformers
