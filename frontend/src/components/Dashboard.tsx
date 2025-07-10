@@ -746,7 +746,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         {/* Header */}
         <div className={`p-4 bg-white flex-shrink-0 flex items-center justify-between transition-all duration-200 ${isScrolled ? 'border-b border-gray-200 shadow-sm' : '' }`}>
           <div className="flex items-center space-x-3">
-            <h2 className="text-4xl top-0 font-Poppins font-semibold bg-gradient-to-l from-purple-500 to-black bg-clip-text text-transparent">AI Assistant</h2>
+            <h2 className="text-4xl top-0 font-Poppins font-semibold bg-gradient-to-l from-purple-500 to-black bg-clip-text text-transparent">Precise.ai</h2>
           </div>
         </div>
 

@@ -62,7 +62,7 @@ export default function Sidebar({
       <div className="p-4 flex-shrink-0">
         <div className="flex items-center justify-between mb-4">
           {!sidebarCollapsed && (
-            <span className="text-lg font-Poppins text-white">AI Assistant</span>
+            <span className="text-lg font-Poppins text-white">Precise.ai</span>
           )}
           <span
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
