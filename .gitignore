@@ -1,0 +1,71 @@
+# Root level gitignore for the entire project
+
+# Environment variables and secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.production
+
+# API Keys and configuration
+*.key
+*.pem
+config/keys.json
+secrets/
+credentials/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Backup files
+*.bak
+*.backup
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+
+# Local development files
+local/
+.local/
+
+# Database files
+*.sqlite3
+*.db
+
+# Node modules (in case any are in root)
+node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Build outputs
+build/
+dist/
+out/
