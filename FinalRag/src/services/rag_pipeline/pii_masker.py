@@ -46,7 +46,6 @@ def load_mapping_from_file(filename: str = "entity_mappings.json"):
     
     if not os.path.exists(file_path):
         return {}
-    
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -55,7 +54,7 @@ def load_mapping_from_file(filename: str = "entity_mappings.json"):
         return {}
 
 # Load spaCy model once
-nlp = spacy.load("en_core_web_md")
+nlp = spacy.load("en_core_web_sm")
 
 def pii_masker_func(text: str) -> str:
     """Mask PII-like content (money, percent, cardinal, ratios) in the input text."""
