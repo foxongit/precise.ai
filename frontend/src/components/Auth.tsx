@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { User } from '@supabase/supabase-js';
+import logo from '../assets/logo.webp';
 
 interface AuthProps {
   onLogin: (user: User) => void;
@@ -119,14 +120,12 @@ export default function Auth({ onLogin }: AuthProps) {
               {/* Logo */}
               <div className="mb-4">
                 <div className="flex items-center space-x-2">
-                  {/* <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center">
-                    <div className="w-3 h-3 bg-white rounded-full"></div>
-                  </div> */}
+                  <img src={logo} alt="Precise.ai Logo" className="w-8 h-8 object-contain" />
                   <span className="text-black text-xl font-semibold">Precise.ai</span>
                 </div>
               </div>
 
-              <div className="mb-4">
+              <div className="mb-4 text-center">
                 <h2 className="text-2xl font-bold text-gray-900 mb-2">
                   {isResetPassword ? 'Reset Password' : (isLogin ? 'Welcome Back!' : 'Create Your Account')}
                 </h2>
@@ -347,7 +346,7 @@ export default function Auth({ onLogin }: AuthProps) {
 
                   {/* Text content */}
                   <div className="text-center text-white">
-                    <h1 className="text-2xl font-bold mb-2">Cashe</h1>
+                    <h1 className="text-2xl font-bold mb-2">Precise.ai</h1>
                     <p className="text-gray-300 text-xs leading-relaxed max-w-xs">
                       Your intelligent assistant
                     </p>

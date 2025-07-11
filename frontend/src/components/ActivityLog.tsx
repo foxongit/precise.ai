@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { MessageSquare, Upload, FileText, RefreshCw } from 'lucide-react';
+import { MessageSquare, Upload, FileText, RefreshCw, X } from 'lucide-react';
 
 interface Session {
   session_id: string;
@@ -18,9 +18,10 @@ interface Activity {
 interface ActivityLogProps {
   currentSessionId?: string | null;
   sessions?: Session[];
+  onClose?: () => void;
 }
 
-export default function ActivityLog({ currentSessionId, sessions = [] }: ActivityLogProps) {
+export default function ActivityLog({ currentSessionId, sessions = [], onClose }: ActivityLogProps) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
@@ -78,11 +79,22 @@ export default function ActivityLog({ currentSessionId, sessions = [] }: Activit
   return (
     <div className="h-full bg-white flex flex-col">
       <div className="p-3 border-b border-gray-200 flex items-center justify-between">
-        <h3 className="font-semibold text-gray-800">Activity Log</h3>
-        {currentSessionId && (
-          <span className="text-xs bg-purple-100 text-purple-800 py-1 px-2 rounded-full">
-            Filtered by current session
-          </span>
+        <div className="flex items-center space-x-2">
+          <h3 className="font-semibold text-gray-800">Activity Log</h3>
+          {currentSessionId && (
+            <span className="text-xs bg-purple-100 text-purple-800 py-1 px-2 rounded-full">
+              Filtered by current session
+            </span>
+          )}
+        </div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+            title="Close Activity Log"
+          >
+            <X className="w-4 h-4" />
+          </button>
         )}
       </div>
       <div className="flex-1 overflow-auto p-3">
