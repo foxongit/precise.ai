@@ -119,10 +119,10 @@ export default function Auth({ onLogin }: AuthProps) {
               {/* Logo */}
               <div className="mb-4">
                 <div className="flex items-center space-x-2">
-                  <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center">
+                  {/* <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center">
                     <div className="w-3 h-3 bg-white rounded-full"></div>
-                  </div>
-                  <span className="text-black text-xl font-semibold"></span>
+                  </div> */}
+                  <span className="text-black text-xl font-semibold">Precise.ai</span>
                 </div>
               </div>
 
@@ -216,7 +216,7 @@ export default function Auth({ onLogin }: AuthProps) {
                   disabled={loading}
                   className={`w-full py-2 px-4 rounded-xl font-medium text-white transition-all duration-200 text-sm ${loading
                     ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-black hover:bg-gray-800'
+                    : 'bg-purple-600 hover:bg-purple-800'
                     }`}
                 >
                   {loading ? (

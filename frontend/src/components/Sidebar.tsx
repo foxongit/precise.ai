@@ -60,36 +60,44 @@ export default function Sidebar({
     <div className={`${sidebarCollapsed ? 'w-16' : 'w-64'} bg-linear-to-b from-purple-950 from-1%  to-black to-15%  flex flex-col h-full transition-all duration-300`}>
       {/* Header */}
       <div className="p-4 flex-shrink-0">
-        <div className="flex items-center justify-between mb-4">
-          {!sidebarCollapsed && (
-            <span className="text-lg font-Poppins text-white">Precise.ai</span>
-          )}
-          <span
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="p-2 hover:bg-gray-700 rounded transition-colors"
-          >
-            <PanelLeft className="w-5 h-5 text-white cursor-pointer" />
-          </span>
-        </div>
-        
-        {!sidebarCollapsed && (
-          <span 
-            className="w-full flex items-center cursor-pointer space-x-3 p-3 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors;"
-            onClick={createNewChat}
-          >
-            <Plus className="w-5 h-5 text-white" />
-            <span className="text-white font-medium">Begin a New Chat</span>
-          </span>
-        )}
-        
-        {sidebarCollapsed && (
-          <span
-            onClick={createNewChat}
-            className="p-1 hover:bg-gray-700 rounded transition-colors flex justify-center"
-            title="Begin a New Chat"
-          >
-            <MessageSquarePlus className="w-5 h-5 text-white" />
-          </span>
+        {sidebarCollapsed ? (
+          // Collapsed layout - stack buttons vertically
+          <div className="flex flex-col items-center space-y-4">
+            <button
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              className="p-2 hover:bg-gray-700 rounded transition-colors"
+            >
+              <PanelLeft className="w-5 h-5 text-white cursor-pointer" />
+            </button>
+            <button
+              onClick={createNewChat}
+              className="p-2 hover:bg-gray-700 rounded transition-colors"
+              title="Begin a New Chat"
+            >
+              <MessageSquarePlus className="w-5 h-5 text-white" />
+            </button>
+          </div>
+        ) : (
+          // Expanded layout - normal header
+          <>
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-lg font-Poppins text-white">Precise.ai</span>
+              <button
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                className="p-2 hover:bg-gray-700 rounded transition-colors"
+              >
+                <PanelLeft className="w-5 h-5 text-white cursor-pointer" />
+              </button>
+            </div>
+            
+            <button 
+              className="w-full flex items-center cursor-pointer space-x-3 p-3 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+              onClick={createNewChat}
+            >
+              <Plus className="w-5 h-5 text-white" />
+              <span className="text-white font-medium">Begin a New Chat</span>
+            </button>
+          </>
         )}
       </div>
 
@@ -115,16 +123,16 @@ export default function Sidebar({
         <div className="mb-6 flex-shrink-0">
           {sidebarCollapsed ? (
             <div className="flex justify-center">
-              <span 
+              {/* <button 
                 className="p-2 hover:bg-gray-700 rounded transition-colors"
                 title="Chat History"
               >
-                {/* <History className="w-5 h-5 text-white" /> */}
-              </span>
+                <MessageSquare className="w-5 h-5 text-white" />
+              </button> */}
             </div>
           ) : (
             <>
-              <span
+              <button
                 onClick={() => setChatHistoryExpanded(!chatHistoryExpanded)}
                 className="flex cursor-pointer items-center justify-between w-full text-sm font-medium text-gray-300 mb-3 hover:text-white transition-colors"
               >
@@ -134,7 +142,7 @@ export default function Sidebar({
                 ) : (
                   <ChevronRight className="w-4 h-4" />
                 )}
-              </span>
+              </button>
               
               {chatHistoryExpanded && (
                 <div className="max-h-60 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800">
@@ -144,7 +152,7 @@ export default function Sidebar({
                     ) : (
                       filteredChats.map((chat: Chat) => (
                         <div key={chat.id} className="group relative">
-                          <span
+                          <button
                             onClick={() => switchToChat(chat)}
                             className={`w-full cursor-pointer flex items-center space-x-3 p-2 rounded-lg transition-colors ${
                               currentChat?.id === chat.id ? 'bg-gray-700' : 'hover:bg-gray-700'
@@ -154,8 +162,8 @@ export default function Sidebar({
                             <span className="text-gray-300 text-sm truncate flex-1 text-left">
                               {chat.title}
                             </span>
-                          </span>
-                          <span
+                          </button>
+                          <button
                             onClick={(e) => {
                               e.stopPropagation();
                               setActiveMenuId(activeMenuId === chat.id ? null : chat.id);
@@ -163,7 +171,7 @@ export default function Sidebar({
                             className="cursor-pointer absolute right-2 top-1/2 transform -translate-y-1/2 p-1 opacity-0 group-hover:opacity-100 hover:bg-gray-600 rounded transition-opacity"
                           >
                             <MoreHorizontal className="w-4 h-4 text-gray-300" />
-                          </span>
+                          </button>
                           {activeMenuId === chat.id && (
                             <div className="absolute right-0 top-8 bg-white border border-gray-300 rounded-lg shadow-lg z-10 min-w-[120px]" ref={menuRef}>
                               <button
@@ -189,23 +197,23 @@ export default function Sidebar({
         <div className="mb-6 flex-shrink-0">
           {sidebarCollapsed ? (
             <div className="flex justify-center">
-              <span
+              {/* <button
                 className="p-2 hover:bg-gray-700 rounded transition-colors"
                 title="Documents"
               >
-                {/* <FileText className="w-5 h-5 text-white" /> */}
-              </span>
+                <FileText className="w-5 h-5 text-white" />
+              </button> */}
             </div>
           ) : (
             <>
             <div className="flex items-center justify-between w-full mb-3">
-                <span
+                <div
                   onClick={() => setDocumentsExpanded(!documentsExpanded)}
                   className="flex cursor-pointer items-center justify-between w-full text-sm font-medium text-gray-300 mb-3 hover:text-white transition-colors"
                 >
                   <span>Choose document</span>
                   <div className="flex items-center space-x-2">
-                    <span
+                    <button
                       onClick={(e) => {
                         e.stopPropagation();
                         // Toggle document viewer or open first available document
@@ -227,14 +235,14 @@ export default function Sidebar({
                       ) : (
                         <Eye className="w-4 h-4 text-gray-400" />
                       )}
-                    </span>
+                    </button>
                     {documentsExpanded ? (
                       <ChevronDown className="w-4 h-4" />
                     ) : (
                       <ChevronRight className="w-4 h-4" />
                     )}
                   </div>
-                </span>
+                </div>
               </div>
               
               {documentsExpanded && (
@@ -249,7 +257,7 @@ export default function Sidebar({
                       {filteredFiles.map((file: UploadedFile) => (
                         <div key={file.id} className="group flex items-center space-x-2 p-2 rounded-lg hover:bg-gray-700 transition-colors">
                           {/* Document info */}
-                          <div 
+                          <button 
                             onClick={() => viewDocument(file)}
                             className="cursor-pointer flex items-center space-x-2 flex-1 min-w-0"
                           >
@@ -259,7 +267,7 @@ export default function Sidebar({
                                 {file.name}
                               </span>
                             </div>
-                          </div>
+                          </button>
                           
                           {/* Action buttons */}
                           <div className="flex items-center space-x-1">
