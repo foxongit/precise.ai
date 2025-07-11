@@ -65,30 +65,39 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [showActivityLog, setShowActivityLog] = useState(false);
-  const [activityLogPosition, setActivityLogPosition] = useState(70); // Position for activity log split when no document viewer
-  const [documentActivitySplit, setDocumentActivitySplit] = useState(60); // Position for activity log within document viewer
+  const [activityLogPosition, setActivityLogPosition] = useState(70);
+  const [documentActivitySplit, setDocumentActivitySplit] = useState(60);
   const [isResizingActivityLog, setIsResizingActivityLog] = useState(false);
   
+  // Document URL state
+  const [documentUrls, setDocumentUrls] = useState<Record<string, string>>({});
+  const [isGeneratingUrls, setIsGeneratingUrls] = useState(false);
+
+  // Refs
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const splitRef = useRef<HTMLDivElement>(null);
+  
   // Convert Supabase data to UI format for compatibility with existing components
-  const chats: Chat[] = conversations.map((conv: any) => ({
+  const chats: Chat[] = conversations.map(conv => ({
     id: conv.id,
-    title: conv.title || conv.name,
+    title: conv.title || conv.name || 'Untitled Chat',
     messages: supabaseChats
-      .filter((chat: any) => chat.conversation_id === conv.id)
-      .sort((a: any, b: any) => {
+      .filter(chat => chat.conversation_id === conv.id)
+      .sort((a, b) => {
         // Primary sort by step, fallback to timestamp for reliability
-        if (a.step !== b.step) {
-          return a.step - b.step;
+        if ((a.step || 0) !== (b.step || 0)) {
+          return (a.step || 0) - (b.step || 0);
         }
         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       })
-      .map((chat: any) => ({
+      .map(chat => ({
         id: chat.id,
-        content: chat.content,
-        sender: chat.role === 'user' ? 'user' : 'ai',
+        content: chat.content || '',
+        sender: chat.role === 'user' ? 'user' : 'ai' as const,
         timestamp: new Date(chat.created_at)
       })),
-    lastMessage: new Date(conv.last_updated || conv.updated_at),
+    lastMessage: new Date(conv.last_updated || conv.updated_at || conv.created_at),
     document_uuid: conv.document_uuid || []
   }));
 
@@ -96,10 +105,13 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 
   // Convert documents to UploadedFile format for compatibility using useMemo
   const uploadedFiles: UploadedFile[] = useMemo(() => {
-    console.log('Documents from useDocuments hook:', documents);
-    // Show ALL documents, not just ones associated with current conversation
+    if (!currentChat || !currentChat.document_uuid || currentChat.document_uuid.length === 0) {
+      return [];
+    }
+    
     return documents
-      .map((doc: any) => ({
+      .filter(doc => currentChat.document_uuid!.includes(doc.id))
+      .map(doc => ({
         id: doc.id,
         name: doc.title || doc.filename,
         type: doc.content_type || 'unknown',
@@ -107,12 +119,10 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         s3Url: doc.storage_path_s3 || doc.storage_path || '',
         uploadDate: new Date(doc.created_at)
       }))
-      .sort((a: UploadedFile, b: UploadedFile) => b.uploadDate.getTime() - a.uploadDate.getTime()); // Sort by upload date, newest first
-  }, [documents]);
+      .sort((a, b) => b.uploadDate.getTime() - a.uploadDate.getTime()); // Sort by upload date, newest first
+  }, [currentChat, documents]);
 
   // State for document URLs
-  const [documentUrls, setDocumentUrls] = useState<Record<string, string>>({});
-  const [isGeneratingUrls, setIsGeneratingUrls] = useState(false);
 
   // Effect to generate signed URLs for documents
   useEffect(() => {
@@ -196,10 +206,6 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const filteredFiles = documentsWithUrls.filter(file =>
     file.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const splitRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -294,13 +300,113 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     };
   }, [isResizing]);
 
+  // Utility functions
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const viewDocument = (file: UploadedFile) => {
+    setSelectedDocument(file);
+  };
+
+  const closeDocumentViewer = () => {
+    setSelectedDocument(null);
+  };
+  
+  const toggleDocumentForAnalysis = (fileId: string) => {
+    setSelectedDocumentsForAnalysis(prev => 
+      prev.includes(fileId) 
+        ? prev.filter(id => id !== fileId)
+        : [...prev, fileId]
+    );
+  };
+
+  // Helper functions for cleaner code organization
   const generateChatTitle = (message: string): string => {
     const words = message.split(' ').slice(0, 3);
     return words.join(' ') + (message.split(' ').length > 3 ? '...' : '');
+  };
+
+  const findMentionedDocuments = (message: string): string[] => {
+    const mentionedDocuments: string[] = [];
+    
+    // Check for explicitly mentioned documents in the message
+    documents.forEach(doc => {
+      const docName = doc.title || doc.filename;
+      if (message.toLowerCase().includes(docName.toLowerCase())) {
+        mentionedDocuments.push(doc.id);
+      }
+    });
+    
+    return mentionedDocuments;
+  };
+
+  const findUnassociatedDocuments = (): string[] => {
+    return documents
+      .filter(doc => {
+        // Check if this document is already associated with any conversation
+        const isAssociated = conversations.some(conv => 
+          conv.document_uuid && conv.document_uuid.includes(doc.id)
+        );
+        return !isAssociated;
+      })
+      .map(doc => doc.id);
+  };
+
+  const shouldAssociateUnassociatedDocs = (message: string): boolean => {
+    return message.toLowerCase().includes('analyze') || 
+           message.toLowerCase().includes('uploaded') ||
+           message.toLowerCase().includes('document');
+  };
+
+  const addMessage = async (sessionId: string, prompt: string, response: string = '') => {
+    const { data: insertedChat, error } = await supabase
+      .from('chat_logs')
+      .insert({
+        session_id: sessionId,
+        prompt,
+        response,
+      })
+      .select()
+      .single();
+      
+    if (error) throw error;
+    return insertedChat;
+  };
+
+  const updateMessage = async (messageId: string, response: string) => {
+    const { error } = await supabase
+      .from('chat_logs')
+      .update({ response })
+      .eq('id', messageId);
+      
+    if (error) throw error;
+  };
+
+  const validateFiles = (files: File[]): File[] => {
+    return files.filter(file => 
+      file.type.startsWith('text/') || 
+      file.type === 'application/pdf' ||
+      file.type.includes('document') ||
+      file.type.includes('word')
+    );
+  };
+
+  const generateUploadMessage = (files: File[]): string => {
+    const fileNames = files.map(f => f.name).join(', ');
+    return files.length === 1 
+      ? `I've uploaded "${fileNames}". Please analyze this document.`
+      : `I've uploaded ${files.length} files: ${fileNames}. Please analyze these documents.`;
+  };
+
+  // Main action handlers
+
+  const startNewChatSession = () => {
+    // Simply start a new chat session without processing any input
+    setCurrentConversationId(null);
+    setInputValue(''); // Clear any existing input
+    setSelectedDocument(null);
+    setSelectedDocumentsForAnalysis([]);
   };
 
   const createNewChat = async () => {
@@ -315,16 +421,24 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       
       console.log('Creating new chat with title:', title);
       
-      // Check if message references any documents
-      const mentionedDocuments: string[] = [];
-      documentsWithUrls.forEach(file => {
-        if (inputValue.toLowerCase().includes(file.name.toLowerCase())) {
-          mentionedDocuments.push(file.id);
+      // Find documents to associate with this chat
+      let documentsToAssociate = findMentionedDocuments(inputValue);
+      
+      // ONLY if there's NO current conversation, check for unassociated documents
+      // This prevents documents from existing chats being duplicated to new chats
+      if (!currentConversationId && documentsToAssociate.length === 0) {
+        const unassociatedDocs = findUnassociatedDocuments();
+        
+        // If there are unassociated docs and the message looks like it's about document analysis
+        if (unassociatedDocs.length > 0 && shouldAssociateUnassociatedDocs(inputValue)) {
+          documentsToAssociate = unassociatedDocs;
         }
-      });
+      }
+      
+      console.log('Documents to associate:', documentsToAssociate);
       
       // Create conversation with any referenced document IDs
-      const newConversation = await createConversation(title, mentionedDocuments);
+      const newConversation = await createConversation(title, documentsToAssociate);
       const newConversationId = newConversation.id;
       
       console.log('Created conversation with ID:', newConversationId);
@@ -341,15 +455,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       console.log('Generated AI response:', aiResponse.substring(0, 50) + '...');
 
       // Create a single chat log entry with both prompt and response
-      const { error: chatError } = await supabase
-        .from('chat_logs')
-        .insert({
-          session_id: newConversationId,
-          prompt: userMessageContent,
-          response: aiResponse,
-        });
-        
-      if (chatError) throw chatError;
+      await addMessage(newConversationId, userMessageContent, aiResponse);
       console.log('Chat log created with prompt and response');
       
       // Add a small delay to ensure data is committed
@@ -367,18 +473,122 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   };
 
   const switchToChat = (chat: Chat) => {
+    // Before switching, check if there are unassociated documents that need a new chat
+    if (!currentConversationId) {
+      const unassociatedDocs = findUnassociatedDocuments();
+      
+      // If there are unassociated documents and there's content in the input field
+      if (unassociatedDocs.length > 0 && inputValue.trim()) {
+        // Create a new chat for the uploaded documents instead of switching
+        createNewChat();
+        return;
+      }
+    }
+    
     setCurrentConversationId(chat.id);
   };
 
   const deleteChat = async (chatId: string) => {
     try {
+      // Find the conversation to get associated documents
+      const conversationToDelete = conversations.find(conv => conv.id === chatId);
+      
+      if (conversationToDelete && conversationToDelete.document_uuid && conversationToDelete.document_uuid.length > 0) {
+        const documentCount = conversationToDelete.document_uuid.length;
+        const confirmMessage = `This chat has ${documentCount} associated document${documentCount > 1 ? 's' : ''}. Deleting this chat will also permanently delete ${documentCount > 1 ? 'these documents' : 'this document'} from your storage. Are you sure you want to continue?`;
+        
+        if (!confirm(confirmMessage)) {
+          return; // User cancelled the deletion
+        }
+        
+        console.log('Deleting documents associated with chat:', conversationToDelete.document_uuid);
+        
+        // Delete each associated document
+        for (const documentId of conversationToDelete.document_uuid) {
+          try {
+            // Find the document to get storage path
+            const documentToDelete = documents.find(doc => doc.id === documentId);
+            
+            if (documentToDelete) {
+              // Delete from Supabase storage if it exists
+              const storagePath = documentToDelete.storage_path_supabase || 
+                                 documentToDelete.storage_path_s3 || 
+                                 documentToDelete.storage_path;
+              
+              if (storagePath) {
+                console.log(`Deleting from storage: ${storagePath}`);
+                const { error: storageError } = await supabase.storage
+                  .from('documents')
+                  .remove([storagePath]);
+                
+                if (storageError) {
+                  console.warn(`Failed to delete document from storage: ${storagePath}`, storageError);
+                } else {
+                  console.log(`Successfully deleted from storage: ${storagePath}`);
+                }
+              }
+            }
+            
+            // Delete from documents table
+            console.log(`Attempting to delete document ${documentId} from database`);
+            
+            // Try deleting with just the document ID first
+            const { error: docError } = await supabase
+              .from('documents')
+              .delete()
+              .eq('id', documentId);
+            
+            if (docError) {
+              console.error(`Failed to delete document ${documentId} from database:`, {
+                error: docError,
+                message: docError.message,
+                details: docError.details,
+                hint: docError.hint,
+                code: docError.code
+              });
+              
+              // Try with user_id filter as backup
+              const { error: altDocError } = await supabase
+                .from('documents')
+                .delete()
+                .eq('id', documentId)
+                .eq('user_id', user.id);
+                
+              if (altDocError) {
+                console.error(`Alternative deletion for ${documentId} also failed:`, altDocError);
+              } else {
+                console.log(`Alternative deletion for ${documentId} succeeded`);
+              }
+            } else {
+              console.log(`Successfully deleted document from database: ${documentId}`);
+            }
+          } catch (docError) {
+            console.error(`Error deleting document ${documentId}:`, docError);
+            // Continue with other documents even if one fails
+          }
+        }
+      } else {
+        // No documents associated, just confirm chat deletion
+        if (!confirm('Are you sure you want to delete this chat? This action cannot be undone.')) {
+          return;
+        }
+      }
+      
+      // Delete the conversation
       await deleteConversation(chatId);
+      
+      // Clean up UI state if current chat is being deleted
       if (currentConversationId === chatId) {
         setCurrentConversationId(null);
+        setSelectedDocument(null);
+        setSelectedDocumentsForAnalysis([]);
       }
+      
+      // Refresh documents to update the UI
+      await refreshDocuments();
+      
     } catch (error) {
       console.error('Failed to delete conversation:', error);
-      // Show user-friendly error message
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       alert(`Failed to delete conversation: ${errorMessage}`);
     }
@@ -434,58 +644,122 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     messagesContainer.addEventListener('scroll', handleScroll);
     return () => messagesContainer.removeEventListener('scroll', handleScroll);
   }, [currentChat]);
-
-  const viewDocument = (file: UploadedFile) => {
-    setSelectedDocument(file);
-  };
-
-  const closeDocumentViewer = () => {
-    setSelectedDocument(null);
-  };
-  
-  const toggleDocumentForAnalysis = (fileId: string) => {
-    setSelectedDocumentsForAnalysis(prev => 
-      prev.includes(fileId) 
-        ? prev.filter(id => id !== fileId)
-        : [...prev, fileId]
-    );
-  };
   
   const deleteDocument = async (documentId: string) => {
     try {
-      // First, remove the document from the current conversation's document_uuid array
-      if (currentConversationId) {
-        const currentConv = conversations.find((conv: any) => conv.id === currentConversationId);
-        if (currentConv && currentConv.document_uuid) {
-          const updatedDocumentIds = currentConv.document_uuid.filter((id: string) => id !== documentId);
+      console.log('=== Starting document deletion process ===');
+      console.log('Document ID to delete:', documentId);
+      console.log('User ID:', user.id);
+      
+      // Find the document to get storage information
+      const documentToDelete = documents.find(doc => doc.id === documentId);
+      console.log('Document found in cache:', documentToDelete ? {
+        id: documentToDelete.id,
+        filename: documentToDelete.filename,
+        storage_path: documentToDelete.storage_path
+      } : 'Not found');
+      
+      // Test: Check if we can query the document first
+      try {
+        const { data: queryResult, error: queryError } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', documentId)
+          .single();
           
+        console.log('Document query result:', { data: queryResult, error: queryError });
+      } catch (queryException) {
+        console.log('Document query exception:', queryException);
+      }
+      
+      // Remove document from current conversation if exists
+      if (currentConversationId) {
+        const currentConv = conversations.find(conv => conv.id === currentConversationId);
+        if (currentConv && currentConv.document_uuid) {
+          const updatedDocumentIds = currentConv.document_uuid.filter(id => id !== documentId);
           await updateConversation(currentConversationId, {
             document_uuid: updatedDocumentIds
           });
         }
       }
 
-      // Remove from selected documents for analysis
+      // Clean up UI state
       setSelectedDocumentsForAnalysis(prev => prev.filter(id => id !== documentId));
-
-      // Close document viewer if the deleted document is currently being viewed
+      
       if (selectedDocument && selectedDocument.id === documentId) {
         setSelectedDocument(null);
       }
 
-      // Delete the document from the database
-      const { error } = await supabase
+      // Delete from Supabase storage if document exists and has storage path
+      if (documentToDelete) {
+        const storagePath = documentToDelete.storage_path_supabase || 
+                           documentToDelete.storage_path_s3 || 
+                           documentToDelete.storage_path;
+        
+        if (storagePath) {
+          console.log(`Deleting document from storage: ${storagePath}`);
+          const { error: storageError } = await supabase.storage
+            .from('documents')
+            .remove([storagePath]);
+          
+          if (storageError) {
+            console.warn(`Failed to delete document from storage: ${storagePath}`, storageError);
+          } else {
+            console.log(`Successfully deleted from storage: ${storagePath}`);
+          }
+        }
+      }
+
+      // Delete from documents database table
+      console.log('Attempting to delete document from database:', {
+        documentId,
+        userId: user.id,
+        documentToDelete: documentToDelete ? {
+          id: documentToDelete.id,
+          filename: documentToDelete.filename,
+          user_id: (documentToDelete as any).user_id
+        } : 'not found'
+      });
+
+      // Try deleting with just the document ID first
+      const { error: deleteError, data: deleteData } = await supabase
         .from('documents')
         .delete()
         .eq('id', documentId)
-        .eq('user_id', user.id);
+        .select();
 
-      if (error) throw error;
+      console.log('Delete operation result:', { error: deleteError, data: deleteData });
+
+      if (deleteError) {
+        console.error('Failed to delete document from database:', {
+          error: deleteError,
+          message: deleteError.message,
+          details: deleteError.details,
+          hint: deleteError.hint,
+          code: deleteError.code
+        });
+        
+        // If the first attempt failed, try with user_id filter as well
+        console.log('Trying alternative deletion with user_id filter...');
+        const { error: altError } = await supabase
+          .from('documents')
+          .delete()
+          .eq('id', documentId)
+          .eq('user_id', user.id);
+          
+        if (altError) {
+          console.error('Alternative deletion also failed:', altError);
+          throw altError;
+        } else {
+          console.log('Alternative deletion succeeded');
+        }
+      } else {
+        console.log('Document deleted successfully from database');
+      }
 
       // Refresh documents to update the UI
       await refreshDocuments();
       
-      console.log('Document deleted successfully');
     } catch (error) {
       console.error('Error deleting document:', error);
       alert('Error deleting document. Please try again.');
@@ -576,17 +850,37 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     try {
       const userMessage = inputValue;
       
-      // Check if message references any documents
-      let documentReferences: string[] = [];
-      documentsWithUrls.forEach(file => {
-        if (inputValue.toLowerCase().includes(file.name.toLowerCase())) {
-          documentReferences.push(file.id);
-        }
-      });
+      // Check if this is the first message in the conversation and update title if needed
+      const currentConv = conversations.find(conv => conv.id === conversationId);
+      const currentChatMessages = currentChat?.messages || [];
       
-      // If we found document references, update the conversation
+      // If this is the first message and the conversation has a generic title, update it
+      if (currentConv && currentChatMessages.length === 0) {
+        const currentTitle = currentConv.title || currentConv.name || '';
+        
+        // Check if the current title is a generic document title
+        const isGenericTitle = currentTitle.startsWith('Document:') || 
+                              currentTitle.endsWith('Documents') || 
+                              currentTitle === 'New Chat' ||
+                              /^\d+ Documents?$/.test(currentTitle); // Match "1 Document", "3 Documents", etc.
+        
+        if (isGenericTitle) {
+          const newTitle = generateChatTitle(userMessage);
+          console.log(`Updating chat title from "${currentTitle}" to "${newTitle}"`);
+          
+          await updateConversation(conversationId, {
+            title: newTitle
+          });
+          
+          // Small delay to ensure title update is committed
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
+      // Check if message references any documents and update conversation
+      const documentReferences = findMentionedDocuments(inputValue);
       if (documentReferences.length > 0) {
-        const currentConv = conversations.find((conv: any) => conv.id === conversationId);
+        const currentConv = conversations.find(conv => conv.id === conversationId);
         if (currentConv) {
           const existingIds = currentConv.document_uuid || [];
           const combinedIds = [...new Set([...existingIds, ...documentReferences])];
@@ -597,41 +891,69 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         }
       }
 
-      // Clear input immediately
+      // Clear input and set loading state
       setInputValue('');
-      
-      // Now set loading state for AI response
       setIsLoading(true);
+      console.log('🔄 Loading state set to true - starting AI response generation');
 
-      // Get conversation history for context
-      const conversationHistory = currentChat?.messages || [];
-
-      // Generate AI response with conversation context
-      const aiResponse = await generateAIResponse(userMessage, conversationHistory);
+      // Step 1: Insert user message immediately (without AI response yet)
+      const insertedMessage = await addMessage(conversationId, userMessage);
       
-      // Create a single chat log entry with both prompt and response
-      const { error: chatError } = await supabase
-        .from('chat_logs')
-        .insert({
-          session_id: conversationId,
-          prompt: userMessage,
-          response: aiResponse,
-        });
-        
-      if (chatError) throw chatError;
-      
-      // Add another small delay for data consistency
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Refresh the chat messages to display both prompt and response
+      // Step 2: Refresh chats to show user message immediately
       await refreshChats();
-      setIsLoading(false);
+      console.log('✅ User message displayed, now generating AI response...');
+      
+      // Scroll to bottom to show the loading animation
+      setTimeout(() => scrollToBottom(), 100);
+      
+      // Small delay to ensure UI updates before AI generation
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      try {
+        // Get conversation history for context (excluding the current message being processed)
+        const conversationHistory = currentChat?.messages || [];
+
+        // Generate AI response with conversation context
+        const aiResponse = await generateAIResponse(userMessage, conversationHistory);
+        
+        // Step 4: Update the chat log entry with the actual AI response
+        await updateMessage(insertedMessage.id, aiResponse);
+        
+        // Step 5: Refresh the chat messages to display the final AI response
+        await refreshChats();
+        console.log('✅ AI response displayed, turning off loading state');
+        
+      } catch (aiError) {
+        console.error('Failed to generate AI response:', aiError);
+        
+        // Update with error message if AI generation fails
+        await updateMessage(insertedMessage.id, 'Sorry, I encountered an error while generating a response. Please try again.');
+        await refreshChats();
+        console.log('❌ Error message displayed, turning off loading state');
+      } finally {
+        setIsLoading(false);
+        console.log('🔄 Loading state set to false');
+      }
+      
     } catch (error) {
       console.error('Failed to send message:', error);
       setIsLoading(false);
     }
   };
 
+  // Event handlers
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (currentConversationId) {
+        handleSendMessage();
+      } else {
+        createNewChat();
+      }
+    }
+  };
+
+  // Drag and drop handlers
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -650,12 +972,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   };
 
   const handleFileUpload = async (files: File[]) => {
-    const validFiles = files.filter(file => 
-      file.type.startsWith('text/') || 
-      file.type === 'application/pdf' ||
-      file.type.includes('document') ||
-      file.type.includes('word')
-    );
+    const validFiles = validateFiles(files);
 
     if (validFiles.length === 0) {
       alert('Please upload valid document files (PDF, DOC, DOCX, TXT)');
@@ -668,8 +985,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       // Array to collect document IDs
       const uploadedDocumentIds: string[] = [];
       
+      // Upload all files
       for (const file of validFiles) {
-        // Upload document and get the result
         const uploadedDoc = await uploadDocument(file, true);
         if (uploadedDoc && uploadedDoc.id) {
           uploadedDocumentIds.push(uploadedDoc.id);
@@ -679,8 +996,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       // Refresh documents to get the latest data
       await refreshDocuments();
       
-      // If we have a current conversation, update its document_uuid array
       if (currentConversationId && uploadedDocumentIds.length > 0) {
+        // If we have a current conversation, update its document_uuid array
         const currentConv = conversations.find((conv: any) => conv.id === currentConversationId);
         if (currentConv) {
           const existingIds = currentConv.document_uuid || [];
@@ -690,23 +1007,39 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             document_uuid: combinedIds
           });
         }
-      }
-      // If no current conversation exists but we have documents, create one
-      else if (uploadedDocumentIds.length > 0 && !currentConversationId) {
-        const title = validFiles.length === 1 
-          ? `Document: ${validFiles[0].name}` 
-          : `Documents (${validFiles.length})`;
         
-        const newConversation = await createConversation(title, uploadedDocumentIds);
-        setCurrentConversationId(newConversation.id);
+        // Add upload message to input for current conversation
+        const uploadMessage = generateUploadMessage(validFiles);
+        setInputValue(prev => prev + (prev ? '\n\n' : '') + uploadMessage);
+        
+      } else if (uploadedDocumentIds.length > 0) {
+        // No current conversation - automatically create a new chat with the uploaded documents
+        const chatTitle = validFiles.length === 1 
+          ? `Document: ${validFiles[0].name}` 
+          : `${validFiles.length} Documents`;
+        
+        console.log('Auto-creating chat for uploaded documents:', chatTitle);
+        
+        // Create conversation with uploaded documents
+        const newConversation = await createConversation(chatTitle, uploadedDocumentIds);
+        const newConversationId = newConversation.id;
+        
+        console.log('Auto-created conversation with ID:', newConversationId);
+        
+        // Set conversation ID
+        setCurrentConversationId(newConversationId);
+        
+        // Prepare welcome message for the documents
+        const uploadMessage = generateUploadMessage(validFiles);
+        setInputValue(uploadMessage);
+        
+        // Add a small delay to ensure data is committed
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Refresh chats to show the new conversation
+        await refreshChats();
+        console.log('Auto-created chat refresh completed');
       }
-      
-      const fileNames = validFiles.map(f => f.name).join(', ');
-      const uploadMessage = validFiles.length === 1 
-        ? `I've uploaded "${fileNames}". Please analyze this document.`
-        : `I've uploaded ${validFiles.length} files: ${fileNames}. Please analyze these documents.`;
-      
-      setInputValue(prev => prev + (prev ? '\n\n' : '') + uploadMessage);
       
     } catch (error) {
       console.error('Error uploading files:', error);
@@ -732,7 +1065,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         selectedDocument={selectedDocument}
         selectedDocumentsForAnalysis={selectedDocumentsForAnalysis}
         currentConversationId={currentConversationId}
-        createNewChat={createNewChat}
+        createNewChat={startNewChatSession}
         switchToChat={switchToChat}
         deleteChat={deleteChat}
         viewDocument={viewDocument}
@@ -744,9 +1077,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       {/* Main Content */}
       <div className="flex-1 flex flex-col bg-white h-full min-w-0 relative" ref={splitRef}>
         {/* Header */}
-        <div className={`p-4 bg-white flex-shrink-0 flex items-center justify-between transition-all duration-200 ${isScrolled ? 'border-b border-gray-200 shadow-sm' : '' }`}>
+       <div className={`p-4 bg-white flex-shrink-0 flex items-center justify-between transition-all duration-200 ${isScrolled ? 'border-b border-gray-200 shadow-sm' : '' }`}>
           <div className="flex items-center space-x-3">
-            <h2 className="text-4xl top-0 font-Poppins font-semibold bg-gradient-to-l from-purple-500 to-black bg-clip-text text-transparent">Precise.ai</h2>
+            <h2 className="text-4xl top-0 font-Poppins font-semibold  bg-gradient-to-l from-purple-500  to-black  bg-clip-text text-transparent">AI Assistant</h2>
           </div>
         </div>
 
@@ -821,6 +1154,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                   </div>
                 ) : (
                   <div className="space-y-4">
+
                     {currentChat.messages.map((message, index) => (
                       <div
                         key={`${message.id}-${index}-${currentConversationId}`} // Enhanced key for better re-rendering
@@ -844,21 +1178,20 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                         </div>
                       </div>
                     ))}
-                    
-                    {isLoading && (
-                      <div className="flex justify-start">
-                        <div className="bg-gray-100 text-gray-800 max-w-xs lg:max-w-md px-4 py-2 rounded-lg">
-                          <div className="flex items-center space-x-2">
-                            <div className="flex space-x-1">
-                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-                            </div>
-                            <span className="text-sm text-gray-500">AI is thinking...</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                              {isLoading && (
+              <div className="flex justify-start">
+                <div className="bg-gray-100 text-gray-800 max-w-xs lg:max-w-md px-4 py-2 rounded-lg">
+                  <div className="flex items-center space-x-2">
+                    <div className="flex space-x-1">
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                    </div>
+                    <span className="text-sm text-gray-500">AI is thinking...</span>
+                  </div>
+                </div>
+              </div>
+            )}
                   </div>
                 )}
                 
@@ -906,12 +1239,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                     type="text"
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
-                    onKeyPress={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleSendMessage();
-                      }
-                    }}
+                    onKeyDown={handleKeyPress}
                     placeholder="Type your message..."
                     className="w-full px-4 py-3 pr-20 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />

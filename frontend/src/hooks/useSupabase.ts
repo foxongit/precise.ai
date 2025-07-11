@@ -296,15 +296,18 @@ export const useChats = (conversationId: string | null) => {
           step: (index * 2) + 1
         });
         
-        // Add assistant message
-        transformedChats.push({
-          ...chatLog,
-          id: `${chatLog.id}-assistant`,
-          conversation_id: chatLog.session_id,
-          role: 'assistant',
-          content: chatLog.response,
-          step: (index * 2) + 2
-        });
+        // Only add assistant message if response is not empty
+        // This allows us to show user messages immediately while AI generates response
+        if (chatLog.response && chatLog.response.trim()) {
+          transformedChats.push({
+            ...chatLog,
+            id: `${chatLog.id}-assistant`,
+            conversation_id: chatLog.session_id,
+            role: 'assistant',
+            content: chatLog.response,
+            step: (index * 2) + 2
+          });
+        }
       });
       
       setChats(transformedChats);
