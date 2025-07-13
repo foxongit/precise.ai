@@ -1,12 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MessageSquare, Paperclip, Send, ChevronDown, Upload, Eye, EyeOff } from 'lucide-react';
-import type { User } from '@supabase/supabase-js';
+import type { User } from '@supabase/supabase-js'; // Keep for type definitions only
 // @ts-ignore - TypeScript can't find these modules, but they exist
 import { useConversations, useChats, useDocuments } from '../hooks/useSupabase';
-// @ts-ignore - TypeScript can't find these types, but they exist
-import { supabase } from '../lib/supabase';
-// @ts-ignore - TypeScript can't find these modules, but they exist
-import { generateGeminiResponse, checkGeminiStatus } from '../lib/geminiService';
+import { queryApi, healthApi, documentsApi, sessionsApi } from '../services/api';
 import Sidebar from './Sidebar';
 import DocumentViewer from './DocumentViewer';
 import ActivityLog from './ActivityLog';
@@ -48,7 +45,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const { conversations, createConversation, updateConversation, deleteConversation } = useConversations(user);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const { chats: supabaseChats, refreshChats } = useChats(currentConversationId);
-  const { documents, uploadDocument, refreshDocuments } = useDocuments(user);
+  const { documents, refreshDocuments } = useDocuments(user);
 
   // UI state
   const [inputValue, setInputValue] = useState('');
@@ -79,27 +76,29 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const splitRef = useRef<HTMLDivElement>(null);
   
   // Convert Supabase data to UI format for compatibility with existing components
-  const chats: Chat[] = conversations.map(conv => ({
-    id: conv.id,
-    title: conv.title || conv.name || 'Untitled Chat',
-    messages: supabaseChats
-      .filter(chat => chat.conversation_id === conv.id)
-      .sort((a, b) => {
-        // Primary sort by step, fallback to timestamp for reliability
-        if ((a.step || 0) !== (b.step || 0)) {
-          return (a.step || 0) - (b.step || 0);
-        }
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      })
-      .map(chat => ({
-        id: chat.id,
-        content: chat.content || '',
-        sender: chat.role === 'user' ? 'user' : 'ai' as const,
-        timestamp: new Date(chat.created_at)
-      })),
-    lastMessage: new Date(conv.last_updated || conv.updated_at || conv.created_at),
-    document_uuid: conv.document_uuid || []
-  }));
+  const chats: Chat[] = conversations
+    .filter(conv => conv.id && conv.id !== 'undefined') // Filter out invalid conversations
+    .map(conv => ({
+      id: conv.id,
+      title: conv.title || conv.name || 'Untitled Chat',
+      messages: supabaseChats
+        .filter(chat => chat.conversation_id === conv.id)
+        .sort((a, b) => {
+          // Primary sort by step, fallback to timestamp for reliability
+          if ((a.step || 0) !== (b.step || 0)) {
+            return (a.step || 0) - (b.step || 0);
+          }
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        })
+        .map(chat => ({
+          id: chat.id,
+          content: chat.content || '',
+          sender: chat.role === 'user' ? 'user' : 'ai' as const,
+          timestamp: new Date(chat.created_at)
+        })),
+      lastMessage: new Date(conv.last_updated || conv.updated_at || conv.created_at),
+      document_uuid: conv.document_uuid || []
+    }));
 
   const currentChat = chats.find(chat => chat.id === currentConversationId) || null;
 
@@ -122,7 +121,27 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       .sort((a, b) => b.uploadDate.getTime() - a.uploadDate.getTime()); // Sort by upload date, newest first
   }, [currentChat, documents]);
 
+  // Backend availability check
+  const [isBackendAvailable, setIsBackendAvailable] = useState(true);
+
   // State for document URLs
+
+  useEffect(() => {
+    const checkBackendHealth = async () => {
+      try {
+        await healthApi.check();
+        setIsBackendAvailable(true);
+      } catch (error) {
+        console.warn('Backend health check failed:', error);
+        setIsBackendAvailable(false);
+      }
+    };
+
+    checkBackendHealth();
+    // Check every 30 seconds
+    const interval = setInterval(checkBackendHealth, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Effect to generate signed URLs for documents
   useEffect(() => {
@@ -132,52 +151,22 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         return;
       }
       
-      // Prevent multiple simultaneous URL generations
-      if (isGeneratingUrls) {
-        return;
-      }
-      
       setIsGeneratingUrls(true);
       console.log('Generating URLs for documents:', uploadedFiles.map(f => f.name));
       
       try {
-        const urlPromises = uploadedFiles.map(async (file) => {
-          const doc = documents.find((d: any) => d.id === file.id);
-          if (doc) {
-            const storagePath = doc.storage_path_supabase || doc.storage_path_s3;
-            
-            if (storagePath) {
-              try {
-                const { data, error } = await supabase.storage
-                  .from('documents')
-                  .createSignedUrl(storagePath, 3600); // 1 hour expiry
-
-                if (error) {
-                  console.error(`Error generating URL for ${file.name}:`, error);
-                  return { id: file.id, url: null };
-                }
-                
-                return { id: file.id, url: data.signedUrl };
-              } catch (error) {
-                console.error(`Failed to generate URL for document ${file.name}:`, error);
-                return { id: file.id, url: null };
-              }
-            } else {
-              console.warn(`No storage path found for document ${file.name}`);
-            }
-          }
-          return { id: file.id, url: null };
-        });
-
-        const urlResults = await Promise.all(urlPromises);
-        const urlMap = urlResults.reduce((acc, result) => {
-          if (result.url) {
-            acc[result.id] = result.url;
-          }
+        // TODO: Use backend API to generate signed URLs for documents
+        // For now, we'll use placeholder URLs
+        console.log('Backend API endpoint for document URLs needs to be implemented');
+        
+        // Create placeholder URLs
+        const urlMap = uploadedFiles.reduce((acc, file) => {
+          // Placeholder URL pattern - in production, this would be a real signed URL from backend
+          acc[file.id] = `/api/documents/view/${file.id}`;
           return acc;
         }, {} as Record<string, string>);
 
-        console.log(`Generated ${Object.keys(urlMap).length} document URLs`);
+        console.log(`Generated ${Object.keys(urlMap).length} placeholder document URLs`);
         setDocumentUrls(urlMap);
       } finally {
         setIsGeneratingUrls(false);
@@ -190,7 +179,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     if (uploadedFiles.length > 0 && needsUrlGeneration && !isGeneratingUrls) {
       generateDocumentUrls();
     }
-  }, [uploadedFiles, documents, isGeneratingUrls]); // Include isGeneratingUrls to prevent race conditions
+  }, [uploadedFiles, isGeneratingUrls]); // Remove documents dependency since we're not using it
 
   // Enhanced function to get documents with URLs using useMemo
   const documentsWithUrls = useMemo((): UploadedFile[] => {
@@ -317,7 +306,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     setSelectedDocumentsForAnalysis(prev => 
       prev.includes(fileId) 
         ? prev.filter(id => id !== fileId)
-        : [...prev, fileId]
+        : Array.from(new Set([...prev, fileId])) // Ensure no duplicates
     );
   };
 
@@ -359,29 +348,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
            message.toLowerCase().includes('document');
   };
 
-  const addMessage = async (sessionId: string, prompt: string, response: string = '') => {
-    const { data: insertedChat, error } = await supabase
-      .from('chat_logs')
-      .insert({
-        session_id: sessionId,
-        prompt,
-        response,
-      })
-      .select()
-      .single();
-      
-    if (error) throw error;
-    return insertedChat;
-  };
-
-  const updateMessage = async (messageId: string, response: string) => {
-    const { error } = await supabase
-      .from('chat_logs')
-      .update({ response })
-      .eq('id', messageId);
-      
-    if (error) throw error;
-  };
+  // Helper function to add a message to the database
+  // These functions are removed as they're not being used
 
   const validateFiles = (files: File[]): File[] => {
     return files.filter(file => 
@@ -450,13 +418,32 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       setInputValue('');
       setIsLoading(true);
       
-      // Generate AI response
-      const aiResponse = await generateAIResponse(userMessageContent);
-      console.log('Generated AI response:', aiResponse.substring(0, 50) + '...');
-
-      // Create a single chat log entry with both prompt and response
-      await addMessage(newConversationId, userMessageContent, aiResponse);
-      console.log('Chat log created with prompt and response');
+      // Generate AI response using the query API
+      let aiResponse = '';
+      try {
+        // Create request with parameters in the order expected by the backend
+        const queryRequest = {
+          query: userMessageContent,
+          session_id: newConversationId,
+          doc_ids: Array.from(new Set(documentsToAssociate)), // Deduplicate doc_ids
+          k: 4
+        };
+        
+        const queryResponse = await queryApi.submitQuery(queryRequest);
+        
+        if (queryResponse && queryResponse.data && queryResponse.data.response) {
+          aiResponse = queryResponse.data.response;
+          console.log('AI response received successfully');
+        } else {
+          aiResponse = "I'm ready to help you analyze your documents. Please let me know what you'd like to know.";
+        }
+      } catch (error) {
+        console.error('Failed to get AI response:', error);
+        aiResponse = "I'm ready to assist you with document analysis. Please upload documents or ask me questions about your existing documents.";
+      }
+      
+      // Chat log is automatically saved by the query API
+      console.log('Chat log will be saved by the query API');
       
       // Add a small delay to ensure data is committed
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -515,52 +502,16 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                                  documentToDelete.storage_path_s3 || 
                                  documentToDelete.storage_path;
               
-              if (storagePath) {
-                console.log(`Deleting from storage: ${storagePath}`);
-                const { error: storageError } = await supabase.storage
-                  .from('documents')
-                  .remove([storagePath]);
-                
-                if (storageError) {
-                  console.warn(`Failed to delete document from storage: ${storagePath}`, storageError);
-                } else {
-                  console.log(`Successfully deleted from storage: ${storagePath}`);
-                }
-              }
-            }
-            
-            // Delete from documents table
-            console.log(`Attempting to delete document ${documentId} from database`);
-            
-            // Try deleting with just the document ID first
-            const { error: docError } = await supabase
-              .from('documents')
-              .delete()
-              .eq('id', documentId);
-            
-            if (docError) {
-              console.error(`Failed to delete document ${documentId} from database:`, {
-                error: docError,
-                message: docError.message,
-                details: docError.details,
-                hint: docError.hint,
-                code: docError.code
-              });
+              console.log(`Deleting document via API: ${documentId}`);
               
-              // Try with user_id filter as backup
-              const { error: altDocError } = await supabase
-                .from('documents')
-                .delete()
-                .eq('id', documentId)
-                .eq('user_id', user.id);
-                
-              if (altDocError) {
-                console.error(`Alternative deletion for ${documentId} also failed:`, altDocError);
-              } else {
-                console.log(`Alternative deletion for ${documentId} succeeded`);
+              // Use backend API to delete the document
+              try {
+                await documentsApi.deleteDocument(documentId);
+                console.log(`Successfully deleted document via API: ${documentId}`);
+              } catch (apiError) {
+                console.error(`Failed to delete document ${documentId} via API:`, apiError);
+                throw apiError;
               }
-            } else {
-              console.log(`Successfully deleted document from database: ${documentId}`);
             }
           } catch (docError) {
             console.error(`Error deleting document ${documentId}:`, docError);
@@ -659,19 +610,6 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         storage_path: documentToDelete.storage_path
       } : 'Not found');
       
-      // Test: Check if we can query the document first
-      try {
-        const { data: queryResult, error: queryError } = await supabase
-          .from('documents')
-          .select('*')
-          .eq('id', documentId)
-          .single();
-          
-        console.log('Document query result:', { data: queryResult, error: queryError });
-      } catch (queryException) {
-        console.log('Document query exception:', queryException);
-      }
-      
       // Remove document from current conversation if exists
       if (currentConversationId) {
         const currentConv = conversations.find(conv => conv.id === currentConversationId);
@@ -681,6 +619,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             document_uuid: updatedDocumentIds
           });
         }
+        
+        // Unlink document from session using the API
+        await sessionsApi.unlinkDocumentFromSession(currentConversationId, documentId, user.id);
       }
 
       // Clean up UI state
@@ -690,27 +631,6 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         setSelectedDocument(null);
       }
 
-      // Delete from Supabase storage if document exists and has storage path
-      if (documentToDelete) {
-        const storagePath = documentToDelete.storage_path_supabase || 
-                           documentToDelete.storage_path_s3 || 
-                           documentToDelete.storage_path;
-        
-        if (storagePath) {
-          console.log(`Deleting document from storage: ${storagePath}`);
-          const { error: storageError } = await supabase.storage
-            .from('documents')
-            .remove([storagePath]);
-          
-          if (storageError) {
-            console.warn(`Failed to delete document from storage: ${storagePath}`, storageError);
-          } else {
-            console.log(`Successfully deleted from storage: ${storagePath}`);
-          }
-        }
-      }
-
-      // Delete from documents database table
       console.log('Attempting to delete document from database:', {
         documentId,
         userId: user.id,
@@ -721,40 +641,13 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         } : 'not found'
       });
 
-      // Try deleting with just the document ID first
-      const { error: deleteError, data: deleteData } = await supabase
-        .from('documents')
-        .delete()
-        .eq('id', documentId)
-        .select();
-
-      console.log('Delete operation result:', { error: deleteError, data: deleteData });
-
-      if (deleteError) {
-        console.error('Failed to delete document from database:', {
-          error: deleteError,
-          message: deleteError.message,
-          details: deleteError.details,
-          hint: deleteError.hint,
-          code: deleteError.code
-        });
-        
-        // If the first attempt failed, try with user_id filter as well
-        console.log('Trying alternative deletion with user_id filter...');
-        const { error: altError } = await supabase
-          .from('documents')
-          .delete()
-          .eq('id', documentId)
-          .eq('user_id', user.id);
-          
-        if (altError) {
-          console.error('Alternative deletion also failed:', altError);
-          throw altError;
-        } else {
-          console.log('Alternative deletion succeeded');
-        }
-      } else {
-        console.log('Document deleted successfully from database');
+      // Delete the document using backend API instead of direct Supabase calls
+      try {
+        await documentsApi.deleteDocument(documentId);
+        console.log('Document deleted successfully via backend API');
+      } catch (deleteError) {
+        console.error('Failed to delete document via API:', deleteError);
+        throw deleteError;
       }
 
       // Refresh documents to update the UI
@@ -763,71 +656,6 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     } catch (error) {
       console.error('Error deleting document:', error);
       alert('Error deleting document. Please try again.');
-    }
-  };
-
-  const generateAIResponse = async (message: string, conversationHistory?: Message[]): Promise<string> => {
-    try {
-      // Check if Gemini is properly configured
-      const status = checkGeminiStatus();
-      if (status !== 'loaded') {
-        throw new Error(`Gemini API key is ${status}`);
-      }
-
-      // Build conversation context
-      let prompt = '';
-      
-      // Add conversation history for context (last 10 messages)
-      if (conversationHistory && conversationHistory.length > 0) {
-        const recentMessages = conversationHistory.slice(-10);
-        prompt += "Previous conversation context:\n";
-        recentMessages.forEach(msg => {
-          prompt += `${msg.sender === 'user' ? 'User' : 'Assistant'}: ${msg.content}\n`;
-        });
-        prompt += "\n";
-      }
-      
-      // Check if there are selected documents for analysis
-      if (selectedDocumentsForAnalysis.length > 0) {
-        prompt += "Note: The user has selected the following documents for analysis: ";
-        const selectedDocs = documentsWithUrls.filter(file => selectedDocumentsForAnalysis.includes(file.id));
-        prompt += selectedDocs.map(doc => doc.name).join(', ');
-        prompt += ". Please reference these documents in your response if relevant.\n\n";
-      }
-      
-      // Check if message references any uploaded files
-      const hasFileReference = documentsWithUrls.some(file => 
-        message.toLowerCase().includes(file.name.toLowerCase())
-      );
-      
-      if (hasFileReference) {
-        prompt += "The user has referenced uploaded documents. Please provide helpful analysis and insights about the documents they've mentioned.\n\n";
-      }
-      
-      // Add the current user message
-      prompt += `Current user message: ${message}`;
-      
-      // Generate response using the service
-      const response = await generateGeminiResponse(prompt);
-      return response;
-      
-    } catch (error) {
-      console.error('Error generating AI response:', error);
-      
-      // Fallback response
-      if (message.toLowerCase().includes('hello') || message.toLowerCase().includes('hi')) {
-        return "Hello! I'm your AI assistant powered by Google Gemini. How can I help you today?";
-      }
-      
-      const hasFileReference = documentsWithUrls.some(file => 
-        message.toLowerCase().includes(file.name.toLowerCase())
-      );
-      
-      if (hasFileReference) {
-        return "I can see you've referenced one of your uploaded documents. I'm ready to help you analyze and understand your documents. What specific information would you like me to help you with?";
-      }
-      
-      return "I'm having trouble connecting to the AI service right now. Please try again in a moment.";
     }
   };
 
@@ -880,9 +708,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       // Check if message references any documents and update conversation
       const documentReferences = findMentionedDocuments(inputValue);
       if (documentReferences.length > 0) {
-        const currentConv = conversations.find(conv => conv.id === conversationId);
-        if (currentConv) {
-          const existingIds = currentConv.document_uuid || [];
+        const conversationData = conversations.find(conv => conv.id === conversationId);
+        if (conversationData) {
+          const existingIds = conversationData.document_uuid || [];
           const combinedIds = [...new Set([...existingIds, ...documentReferences])];
           
           await updateConversation(conversationId, {
@@ -894,50 +722,102 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       // Clear input and set loading state
       setInputValue('');
       setIsLoading(true);
-      console.log('🔄 Loading state set to true - starting AI response generation');
 
-      // Step 1: Insert user message immediately (without AI response yet)
-      const insertedMessage = await addMessage(conversationId, userMessage);
-      
-      // Step 2: Refresh chats to show user message immediately
-      await refreshChats();
-      console.log('✅ User message displayed, now generating AI response...');
-      
-      // Scroll to bottom to show the loading animation
-      setTimeout(() => scrollToBottom(), 100);
-      
-      // Small delay to ensure UI updates before AI generation
-      await new Promise(resolve => setTimeout(resolve, 200));
+      // Get all documents selected for this conversation
+      const chatData = conversations.find((conv: any) => conv.id === conversationId);
+      // Deduplicate document IDs using Set to avoid duplicates
+      const selectedDocIds = [...new Set([
+        ...(chatData?.document_uuid || []),
+        ...selectedDocumentsForAnalysis
+      ])];
+
+      console.log('Current conversation:', currentConv);
+      console.log('Document UUID from conversation:', currentConv?.document_uuid);
+      console.log('Selected documents for analysis:', selectedDocumentsForAnalysis);
+      console.log('All selected doc IDs:', selectedDocIds);
+      console.log('Available documents:', uploadedFiles.map(f => ({ id: f.id, name: f.name })));          // Use selected document IDs as they are
 
       try {
-        // Get conversation history for context (excluding the current message being processed)
-        const conversationHistory = currentChat?.messages || [];
-
-        // Generate AI response with conversation context
-        const aiResponse = await generateAIResponse(userMessage, conversationHistory);
+        let aiResponse = '';
         
-        // Step 4: Update the chat log entry with the actual AI response
-        await updateMessage(insertedMessage.id, aiResponse);
+        // Use the RAG API if documents are selected and backend is available
+        if (selectedDocIds.length > 0 && isBackendAvailable) {
+          console.log('Using RAG query API with documents:', selectedDocIds);
+          console.log('User message:', userMessage);
+          console.log('Conversation ID:', conversationId);
+          
+          // Create a request payload matching the structure expected by the backend
+          const queryRequest = {
+            query: userMessage,
+            session_id: conversationId,
+            doc_ids: Array.from(new Set(selectedDocIds)), // Deduplicate doc_ids
+            k: 4
+          };
+          
+          // Log minimal info about the request
+          console.log('Sending query with:', {
+            sessionId: queryRequest.session_id,
+            numDocs: queryRequest.doc_ids.length,
+            queryLength: queryRequest.query.length
+          });
+          
+          try {
+            const queryResponse = await queryApi.submitQuery(queryRequest);
+            console.log('RAG API response:', queryResponse);
+            console.log('Response data:', queryResponse?.data);
+            
+            if (queryResponse && queryResponse.data && queryResponse.data.response) {
+              aiResponse = queryResponse.data.response;
+              console.log('AI response extracted:', aiResponse);
+            } else {
+              console.error('Invalid response structure:', queryResponse);
+              throw new Error('No response from RAG API');
+            }
+          } catch (apiError) {
+            console.error('API call failed:', apiError);
+            throw apiError;
+          }
+        } else {
+          // Fallback response when no documents are selected or backend unavailable
+          if (selectedDocIds.length === 0) {
+            aiResponse = "I notice you haven't selected any documents for analysis. Please upload and select documents from the sidebar to get AI-powered insights from your content. You can also drag and drop files into the chat area to upload them.";
+          } else {
+            aiResponse = "I'm sorry, but the document analysis service is currently unavailable. Please check if the backend server is running and try again.";
+          }
+        }
         
-        // Step 5: Refresh the chat messages to display the final AI response
+        // Chat log is automatically saved by the query API
+        console.log('Chat log will be saved by the query API');
+        
+        // Add a small delay for data consistency
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Refresh the chat messages to display both prompt and response
         await refreshChats();
-        console.log('✅ AI response displayed, turning off loading state');
-        
-      } catch (aiError) {
-        console.error('Failed to generate AI response:', aiError);
-        
-        // Update with error message if AI generation fails
-        await updateMessage(insertedMessage.id, 'Sorry, I encountered an error while generating a response. Please try again.');
-        await refreshChats();
-        console.log('❌ Error message displayed, turning off loading state');
-      } finally {
         setIsLoading(false);
-        console.log('🔄 Loading state set to false');
+        
+      } catch (error) {
+        console.error('Error using RAG API:', error);
+        setIsLoading(false);
+        
+        // Show and save error message to user via backend API
+        try {
+          // Create a minimal query request that will be recorded in the backend
+          // The backend will handle storing the appropriate error message
+          await queryApi.processQuery(userMessage, conversationId, selectedDocumentsForAnalysis);
+          
+          await refreshChats();
+        } catch (logError) {
+          console.error('Failed to save error response:', logError);
+        }
       }
       
     } catch (error) {
       console.error('Failed to send message:', error);
       setIsLoading(false);
+      
+      // Show friendly error to user
+      alert('Failed to send message. Please check your connection and try again.');
     }
   };
 
@@ -985,25 +865,50 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       // Array to collect document IDs
       const uploadedDocumentIds: string[] = [];
       
-      // Upload all files
+      // Ensure we have a session ID to upload documents to
+      let sessionIdToUse = currentConversationId;
+      
+      // If no current conversation, create one
+      if (!sessionIdToUse) {
+        console.log('No current conversation, creating one for document upload');
+        const newConversation = await createConversation('Document Upload', []);
+        sessionIdToUse = newConversation.id;
+        setCurrentConversationId(sessionIdToUse);
+        console.log('Created new conversation with ID:', sessionIdToUse);
+      }
+      
+      // Upload all files using the API (RAG backend)
       for (const file of validFiles) {
-        const uploadedDoc = await uploadDocument(file, true);
-        if (uploadedDoc && uploadedDoc.id) {
-          uploadedDocumentIds.push(uploadedDoc.id);
+        console.log(`Uploading file ${file.name} to session ${sessionIdToUse} via API`);
+        try {
+          const response = await documentsApi.uploadDocument(file, sessionIdToUse);
+          const uploadData = response.data as { doc_id?: string };
+          
+          if (uploadData && uploadData.doc_id) {
+            console.log(`File ${file.name} uploaded successfully, doc_id: ${uploadData.doc_id}`);
+            uploadedDocumentIds.push(uploadData.doc_id);
+          } else {
+            console.error('Upload response missing doc_id:', response);
+          }
+        } catch (uploadError) {
+          console.error(`Error uploading file ${file.name}:`, uploadError);
+          // Continue with other files
         }
       }
       
       // Refresh documents to get the latest data
       await refreshDocuments();
       
-      if (currentConversationId && uploadedDocumentIds.length > 0) {
-        // If we have a current conversation, update its document_uuid array
-        const currentConv = conversations.find((conv: any) => conv.id === currentConversationId);
-        if (currentConv) {
-          const existingIds = currentConv.document_uuid || [];
+      if (sessionIdToUse && uploadedDocumentIds.length > 0) {
+        // Update the conversation with the uploaded document IDs
+        const conversationToUpdate = conversations.find((conv: any) => conv.id === sessionIdToUse);
+        if (conversationToUpdate) {
+          const existingIds = conversationToUpdate.document_uuid || [];
           const combinedIds = [...new Set([...existingIds, ...uploadedDocumentIds])];
           
-          await updateConversation(currentConversationId, {
+          console.log(`Updating conversation ${sessionIdToUse} with document IDs:`, combinedIds);
+          
+          await updateConversation(sessionIdToUse, {
             document_uuid: combinedIds
           });
         }
@@ -1178,42 +1083,43 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                         </div>
                       </div>
                     ))}
-                              {isLoading && (
-              <div className="flex justify-start">
-                <div className="bg-gray-100 text-gray-800 max-w-xs lg:max-w-md px-4 py-2 rounded-lg">
-                  <div className="flex items-center space-x-2">
-                    <div className="flex space-x-1">
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-                    </div>
-                    <span className="text-sm text-gray-500">AI is thinking...</span>
-                  </div>
-                </div>
-              </div>
-            )}
+                    
+                    {isLoading && (
+                      <div className="flex justify-start">
+                        <div className="bg-gray-100 text-gray-800 max-w-xs lg:max-w-md px-4 py-2 rounded-lg">
+                          <div className="flex items-center space-x-2">
+                            <div className="flex space-x-1">
+                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                            </div>
+                            <span className="text-sm text-gray-500">AI is thinking...</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                
+                    <div ref={messagesEndRef} />
                   </div>
                 )}
-                
-                <div ref={messagesEndRef} />
-              </div>
 
-              {/* Hidden file input */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".pdf,.doc,.docx,.txt,text/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files.length > 0) {
-                    const files = Array.from(e.target.files);
-                    handleFileUpload(files);
-                    // Reset the input so the same file can be uploaded again if needed
-                    e.target.value = '';
-                  }
-                }}
-              />
+                {/* Hidden file input */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.doc,.docx,.txt,text/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      const files = Array.from(e.target.files);
+                      handleFileUpload(files);
+                      // Reset the input so the same file can be uploaded again if needed
+                      e.target.value = '';
+                    }
+                  }}
+                />
+              </div>
             </div>
 
             {isUserScrolling && !isNearBottom && (

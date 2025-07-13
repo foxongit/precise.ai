@@ -4,11 +4,16 @@ from .query_enricher import query_enricher_func
 from .pii_masker import pii_masker_func
 from .llm_answerer import llm_answerer_func
 from typing import List, Dict
-from langchain_ollama import OllamaLLM
+from langchain_google_genai import ChatGoogleGenerativeAI
+from src.core.config import settings
 
 class RAGPipeline:
     def __init__(self):
-        self.llm = OllamaLLM(model="llama3:latest")
+        self.llm = ChatGoogleGenerativeAI(
+            model=settings.GEMINI_MODEL,
+            google_api_key=settings.GOOGLE_API_KEY,
+            temperature=0.1
+        )
         self.document_manager = document_manager
     
     def add_document(self, 

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { User } from '@supabase/supabase-js';
-import { supabase, TABLES } from '../lib/supabase';
-import { v4 as uuidv4 } from 'uuid';
+import { sessionsApi, documentsApi } from '../services/api';
 
 // Define types for our data based on the actual FinalRag schema
 export interface Conversation {
@@ -70,32 +69,27 @@ export const useConversations = (user: User | null) => {
     
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from(TABLES.SESSIONS)
-        .select(`
-          *,
-          document_sessions (
-            document_id,
-            documents (
-              id,
-              filename
-            )
-          )
-        `)
-        .eq('user_id', user.id)
-        .order('updated_at', { ascending: false });
-
-      if (error) throw error;
+      console.log('Loading conversations via FinalRag API...');
+      // Use the FinalRag API to get user sessions
+      const response = await sessionsApi.getUserSessions();
+      const sessions = (response.data as any)?.sessions || response.data || [];
       
-      // Transform data to match expected format
-      const transformedConversations: Conversation[] = (data || []).map(session => ({
-        ...session,
-        title: session.name, // Map name to title for compatibility
-        last_updated: session.updated_at, // Map updated_at to last_updated for compatibility
-        document_uuid: session.document_sessions?.map((ds: any) => ds.document_id) || [] // Extract document IDs from junction table
-      }));
+      // Transform sessions to match expected conversation format
+      const transformedConversations: Conversation[] = sessions
+        .filter((session: any) => session.id && session.id !== 'undefined') // Use 'id' instead of 'session_id'
+        .map((session: any) => ({
+          id: session.id, // Use session.id directly
+          name: session.name || 'Unnamed Session',
+          user_id: session.user_id,
+          created_at: session.created_at,
+          updated_at: session.updated_at || session.created_at,
+          title: session.name || 'Unnamed Session',
+          last_updated: session.updated_at || session.created_at,
+          document_uuid: [] // Will be populated by separate API call if needed
+        }));
       
       setConversations(transformedConversations);
+      console.log('Loaded conversations via API:', transformedConversations);
     } catch (err) {
       console.error('Error loading conversations:', err);
     } finally {
@@ -106,44 +100,31 @@ export const useConversations = (user: User | null) => {
   const createConversation = async (title: string, documentIds: string[] = []) => {
     if (!user) throw new Error('User not authenticated');
     
-    const newConversation = {
-      id: uuidv4(),
-      name: title, // Use name instead of title
-      user_id: user.id
-    };
-    
     try {
-      const { data, error } = await supabase
-        .from(TABLES.SESSIONS)
-        .insert(newConversation)
-        .select()
-        .single();
-
-      if (error) throw error;
+      // Use the FinalRag sessions API to create a session
+      const sessionResponse = await sessionsApi.createSession({ name: title });
+      const data = sessionResponse.data;
       
-      // If documentIds are provided, create document_sessions entries
-      if (documentIds.length > 0) {
-        const documentSessionEntries = documentIds.map(docId => ({
-          id: uuidv4(),
-          document_id: docId,
-          session_id: data.id
-        }));
-        
-        await supabase
-          .from(TABLES.DOCUMENT_SESSIONS)
-          .insert(documentSessionEntries);
-      }
+      console.log('Session created via API:', data);
+      
+      // Document linking will be handled by the backend when documents are uploaded
       
       // Refresh conversations list
       await loadConversations();
       
       // Return data with compatibility fields
-      return {
-        ...data,
-        title: data.name,
-        last_updated: data.updated_at,
+      const conversation: Conversation = {
+        id: data.session_id,
+        name: title || 'New Chat',
+        user_id: data.user_id,
+        created_at: data.created_at,
+        updated_at: data.created_at,
+        title: title || 'New Chat',
+        last_updated: data.created_at,
         document_uuid: documentIds
-      } as Conversation;
+      };
+      
+      return conversation;
     } catch (err) {
       console.error('Error creating conversation:', err);
       throw err;
@@ -154,50 +135,12 @@ export const useConversations = (user: User | null) => {
     if (!user) throw new Error('User not authenticated');
     
     try {
-      // Transform updates to match database schema
-      const dbUpdates: any = {};
+      console.log('Updating conversation (API integration needed):', conversationId, updates);
       
-      if (updates.title) {
-        dbUpdates.name = updates.title;
-      }
-      if (updates.name) {
-        dbUpdates.name = updates.name;
-      }
+      // TODO: Implement proper API endpoint for updating conversations
+      // For now, just update local state and refresh
       
-      // Handle document_uuid updates by managing document_sessions
-      if (updates.document_uuid !== undefined) {
-        // First, remove all existing document_sessions for this session
-        await supabase
-          .from(TABLES.DOCUMENT_SESSIONS)
-          .delete()
-          .eq('session_id', conversationId);
-          
-        // Then, add new document_sessions
-        if (updates.document_uuid.length > 0) {
-          const documentSessionEntries = updates.document_uuid.map(docId => ({
-            id: uuidv4(),
-            document_id: docId,
-            session_id: conversationId
-          }));
-          
-          await supabase
-            .from(TABLES.DOCUMENT_SESSIONS)
-            .insert(documentSessionEntries);
-        }
-      }
-      
-      // Update the session if there are direct field updates
-      if (Object.keys(dbUpdates).length > 0) {
-        const { error } = await supabase
-          .from(TABLES.SESSIONS)
-          .update(dbUpdates)
-          .eq('id', conversationId)
-          .eq('user_id', user.id);
-
-        if (error) throw error;
-      }
-      
-      // Refresh conversations list
+      // Refresh conversations list to get latest data
       await loadConversations();
       
       return true;
@@ -211,30 +154,10 @@ export const useConversations = (user: User | null) => {
     if (!user) throw new Error('User not authenticated');
     
     try {
-      // First delete associated chat messages
-      const { error: chatError } = await supabase
-        .from(TABLES.CHAT_LOGS)
-        .delete()
-        .eq('session_id', conversationId);
-
-      if (chatError) throw chatError;
+      console.log('Deleting conversation (API integration needed):', conversationId);
       
-      // Delete document_sessions associations
-      const { error: docSessionError } = await supabase
-        .from(TABLES.DOCUMENT_SESSIONS)
-        .delete()
-        .eq('session_id', conversationId);
-        
-      if (docSessionError) throw docSessionError;
-      
-      // Then delete the conversation/session
-      const { error } = await supabase
-        .from(TABLES.SESSIONS)
-        .delete()
-        .eq('id', conversationId)
-        .eq('user_id', user.id);
-
-      if (error) throw error;
+      // TODO: Implement proper API endpoint for deleting conversations
+      // For now, just refresh to get latest data
       
       // Refresh conversations list
       await loadConversations();
@@ -270,22 +193,22 @@ export const useChats = (conversationId: string | null) => {
   }, [conversationId]);
 
   const refreshChats = async () => {
-    if (!conversationId) return;
+    if (!conversationId || conversationId === 'undefined') {
+      console.warn('Invalid conversation ID, skipping chat refresh');
+      setChats([]);
+      return;
+    }
     
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from(TABLES.CHAT_LOGS)
-        .select('*')
-        .eq('session_id', conversationId)
-        .order('created_at', { ascending: true });
-
-      if (error) throw error;
+      // Use backend API to get chat history
+      const response = await sessionsApi.getChatHistory(conversationId);
+      const chatHistory = (response.data as any)?.chat_history || [];
       
-      // Transform chat_logs data to match expected format
+      // Transform chat history data to match expected format
       const transformedChats: ChatMessage[] = [];
       
-      (data || []).forEach((chatLog, index) => {
+      chatHistory.forEach((chatLog: any, index: number) => {
         // Add user message
         transformedChats.push({
           ...chatLog,
@@ -313,6 +236,7 @@ export const useChats = (conversationId: string | null) => {
       setChats(transformedChats);
     } catch (err) {
       console.error('Error loading chats:', err);
+      setChats([]);
     } finally {
       setIsLoading(false);
     }
@@ -341,98 +265,101 @@ export const useDocuments = (user: User | null) => {
     
     setIsLoading(true);
     try {
-      console.log('Fetching documents from database...');
-      // In FinalRag schema, documents are global, not user-specific
-      const { data, error } = await supabase
-        .from(TABLES.DOCUMENTS)
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Error fetching documents:', error);
-        throw error;
+      console.log('Fetching documents via session-based API...');
+      
+      // First, get all user sessions
+      const sessionsResponse = await sessionsApi.getUserSessions();
+      const sessions = (sessionsResponse.data as any)?.sessions || [];
+      
+      console.log('User sessions:', sessions);
+      
+      // Get documents from all sessions
+      const allDocuments: Document[] = [];
+      
+      for (const session of sessions) {
+        // Check if session has a valid id
+        const sessionId = session.id;
+        if (!sessionId || sessionId === 'undefined') {
+          console.warn('Skipping session with invalid ID:', session);
+          continue;
+        }
+        
+        try {
+          // Get documents for each session
+          const sessionDocsResponse = await sessionsApi.getSessionDocuments(sessionId);
+          const sessionDocs = (sessionDocsResponse.data as any)?.documents || [];
+          
+          console.log(`Documents for session ${sessionId}:`, sessionDocs);
+          
+          // Transform and add to collection
+          const transformedDocs: Document[] = sessionDocs.map((doc: any) => ({
+            id: doc.id || doc.document_id,
+            filename: doc.filename || doc.name,
+            storage_path: doc.storage_path || '',
+            upload_date: doc.upload_date || doc.created_at,
+            created_at: doc.created_at || new Date().toISOString(),
+            updated_at: doc.updated_at || doc.created_at || new Date().toISOString(),
+            user_id: user.id,
+            title: doc.filename || doc.name,
+            content_type: 'application/pdf',
+            storage_path_supabase: doc.storage_path || '',
+            storage_path_s3: doc.storage_path || '',
+            status: doc.status || 'stored'
+          }));
+          
+          // Add to collection (avoid duplicates)
+          transformedDocs.forEach(doc => {
+            if (!allDocuments.find(existing => existing.id === doc.id)) {
+              allDocuments.push(doc);
+            }
+          });
+          
+        } catch (sessionError) {
+          console.warn(`Failed to get documents for session ${sessionId}:`, sessionError);
+          // Continue with other sessions
+        }
       }
       
-      console.log('Raw documents from database:', data);
-      
-      // Transform documents data to match expected format
-      const transformedDocuments: Document[] = (data || []).map(doc => ({
-        ...doc,
-        user_id: user.id, // Add user_id for compatibility
-        title: doc.filename, // Map filename to title for compatibility
-        content_type: 'application/pdf', // Default content type
-        storage_path_supabase: doc.storage_path,
-        storage_path_s3: doc.storage_path,
-        status: 'stored'
-      }));
-      
-      console.log('Transformed documents:', transformedDocuments);
-      setDocuments(transformedDocuments);
+      console.log('All documents from sessions:', allDocuments);
+      setDocuments(allDocuments);
     } catch (err) {
-      console.error('Error loading documents:', err);
+      console.error('Error loading documents via sessions:', err);
+      setDocuments([]); // Set empty array on error
     } finally {
       setIsLoading(false);
     }
   };
 
-  const uploadDocument = async (file: File, processContent: boolean = true) => {
+  const uploadDocument = async (file: File, sessionId: string) => {
     if (!user) throw new Error('User not authenticated');
     
     try {
       console.log('Starting document upload for file:', file.name);
       
-      // Generate a unique filename
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${user.id}/${uuidv4()}.${fileExt}`;
+      // Use the backend API to upload the document
+      console.log('Uploading document via API...');
+      const response = await documentsApi.uploadDocument(file, sessionId);
+      const uploadResult = response.data as any;
       
-      console.log('Generated filename:', fileName);
-      
-      // Upload file to storage
-      const { error: uploadError } = await supabase.storage
-        .from('documents')
-        .upload(fileName, file);
-      
-      if (uploadError) {
-        console.error('Storage upload error:', uploadError);
-        throw uploadError;
-      }
-      
-      console.log('File uploaded to storage successfully');
-      
-      // Create document record
-      const documentData = {
-        id: uuidv4(),
-        filename: file.name,
-        storage_path: fileName
-      };
-      
-      console.log('Creating document record:', documentData);
-      
-      const { data, error } = await supabase
-        .from(TABLES.DOCUMENTS)
-        .insert(documentData)
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Database insert error:', error);
-        throw error;
-      }
-      
-      console.log('Document record created:', data);
+      console.log('Document upload response:', uploadResult);
       
       // Refresh document list
       await refreshDocuments();
       
       // Return data with compatibility fields
       const result = {
-        ...data,
+        id: uploadResult.doc_id,
+        filename: uploadResult.filename,
+        storage_path: uploadResult.filename, // Backend stores the path
+        upload_date: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
         user_id: user.id,
-        title: data.filename,
+        title: uploadResult.filename,
         content_type: file.type,
-        storage_path_supabase: data.storage_path,
-        storage_path_s3: data.storage_path,
-        status: processContent ? 'processing' : 'stored'
+        storage_path_supabase: uploadResult.filename,
+        storage_path_s3: uploadResult.filename,
+        status: uploadResult.status || 'processing'
       } as Document;
       
       console.log('Upload completed, returning:', result);
