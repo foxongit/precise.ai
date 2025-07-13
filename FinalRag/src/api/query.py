@@ -5,9 +5,9 @@ from src.services.session_service import session_service
 from src.services.document_service import document_service
 from src.services.rag_pipeline.pipeline import rag_pipeline
 
-router = APIRouter(prefix="/query", tags=["query"])
+router = APIRouter(tags=["query"])
 
-@router.post("/", response_model=QueryResponse)
+@router.post("/query", response_model=QueryResponse)
 async def process_query(request: QueryRequest):
     """Process a query against selected documents and save to chat logs"""
     
@@ -16,16 +16,17 @@ async def process_query(request: QueryRequest):
         if not session_service.verify_session(request.session_id, request.user_id):
             raise HTTPException(status_code=404, detail="Session not found or doesn't belong to user")
         
-        # Check if all requested documents are ready
+        # Check if all requested documents are ready (if any documents are provided)
         not_ready_docs = []
-        for doc_id in request.doc_ids:
-            status_info = document_service.get_document_status(doc_id)
-            if status_info:
-                status = status_info["status"]
-                if status == "processing":
-                    not_ready_docs.append(f"{doc_id} (processing)")
-                elif status == "failed":
-                    not_ready_docs.append(f"{doc_id} (failed)")
+        if request.doc_ids:  # Only check if documents are provided
+            for doc_id in request.doc_ids:
+                status_info = document_service.get_document_status(doc_id)
+                if status_info:
+                    status = status_info["status"]
+                    if status == "processing":
+                        not_ready_docs.append(f"{doc_id} (processing)")
+                    elif status == "failed":
+                        not_ready_docs.append(f"{doc_id} (failed)")
         
         if not_ready_docs:
             return JSONResponse(

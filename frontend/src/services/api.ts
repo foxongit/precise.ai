@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 // Create axios instance with base configuration
 const api: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
-  timeout: 30000, // 30 seconds timeout
+  timeout: 120000, // 2 minutes timeout for API processing
   headers: {
     'Content-Type': 'application/json',
   },
@@ -58,8 +58,18 @@ interface SessionResponse {
 
 interface SessionData {
   session_id: string;
-  name: string;
+  user_id: string;
   created_at: string;
+  name?: string;
+}
+
+interface DocumentUploadResponse {
+  message: string;
+  doc_id: string;
+  session_id: string;
+  filename: string;
+  status: string;
+  status_check_url: string;
 }
 
 interface SingleSessionResponse {
@@ -75,38 +85,53 @@ interface MessagesResponse {
 }
 
 interface DocumentsResponse {
-  data: UploadedFile[];
+  data: DocumentUploadResponse | UploadedFile[];
   status: number;
   statusText: string;
 }
 
 interface QueryResponse {
   data: {
-    id: string;
-    answer: string;
-    context?: string[];
-    source_documents?: string[];
+    status: string;
+    session_id: string;
+    original_query: string;
+    enriched_query: string;
+    retrieved_chunks: string;
+    masked_chunks: string;
+    response: string;
+    retrieved_metadata: any[];
+    processed_docs: string[];
+    chat_log_id?: string;
+    warning?: string;
   };
   status: number;
   statusText: string;
 }
 
 interface SessionCreateParams {
-  name: string;
+  name?: string; // Optional name parameter
 }
 
 // Sessions API
 export const sessionsApi = {
   // Create a new session
-  createSession: async (params: SessionCreateParams): Promise<SingleSessionResponse> => {
+  createSession: async (params?: SessionCreateParams): Promise<SingleSessionResponse> => {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
     
-    const response = await api.post('/sessions/', {
-      user_id: userId,
-      name: params.name || 'New Chat'
-    });
-    return response;
+    try {
+      // Create payload with user_id and optional name
+      const payload = {
+        user_id: userId,
+        ...(params?.name && { name: params.name }) // Only include name if provided
+      };
+      
+      const response = await api.post('/sessions', payload); // No trailing slash to match backend
+      return response;
+    } catch (error) {
+      console.error('Failed to create session:', error);
+      throw error;
+    }
   },
 
   // Get all sessions for current user
@@ -114,8 +139,13 @@ export const sessionsApi = {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
     
-    const response = await api.get(`/sessions/${userId}`);
-    return response;
+    try {
+      const response = await api.get(`/sessions/${userId}`);
+      return response;
+    } catch (error) {
+      console.error('Failed to get user sessions:', error);
+      throw error;
+    }
   },
 
   // Get chat history for a session
@@ -123,14 +153,29 @@ export const sessionsApi = {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
     
-    const response = await api.get(`/sessions/${sessionId}/chat-history?user_id=${userId}`);
-    return response;
+    // Validate sessionId
+    if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+      throw new Error('Invalid session ID provided');
+    }
+    
+    try {
+      const response = await api.get(`/sessions/${sessionId}/chat-history?user_id=${userId}`);
+      return response;
+    } catch (error) {
+      console.error('Failed to get chat history:', error);
+      throw error;
+    }
   },
 
   // Get documents for a session
   getSessionDocuments: async (sessionId: string): Promise<DocumentsResponse> => {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
+    
+    // Validate sessionId
+    if (!sessionId || sessionId === 'undefined' || sessionId === 'null') {
+      throw new Error('Invalid session ID provided');
+    }
     
     const response = await api.get(`/sessions/${sessionId}/documents?user_id=${userId}`);
     return response;
@@ -154,7 +199,7 @@ export const sessionsApi = {
     return response;
   },
 
-  // Added to match Dashboard.tsx usage
+  // Get all sessions for current user
   getSessions: async (): Promise<SessionResponse> => {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
@@ -162,8 +207,16 @@ export const sessionsApi = {
     const response = await api.get(`/sessions/${userId}`);
     return response;
   },
+  
+  // Unlink document from session
+  unlinkDocumentFromSession: async (sessionId: string, documentId: string, userId: string): Promise<any> => {
+    if (!userId) throw new Error('User not authenticated');
+    
+    const response = await api.delete(`/sessions/${sessionId}/unlink-document?document_id=${documentId}&user_id=${userId}`);
+    return response;
+  },
 
-  // Added to match Dashboard.tsx usage
+  // Get chat history for a session
   getSessionMessages: async (sessionId: string): Promise<MessagesResponse> => {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
@@ -186,17 +239,25 @@ export const documentsApi = {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
     
+    // Create formData with parameters in the order expected by backend
     const formData = new FormData();
     formData.append('file', file);
     formData.append('user_id', userId);
     formData.append('session_id', sessionId);
     
-    const response = await api.post('/documents/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-    return response;
+    console.log('Uploading document with session_id:', sessionId);
+    
+    try {
+      const response = await api.post('/documents/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      return response;
+    } catch (error) {
+      console.error('Failed to upload document:', error);
+      throw error;
+    }
   },
 
   // Get document status
@@ -223,7 +284,7 @@ export const documentsApi = {
     return response;
   },
 
-  // Added to match Dashboard.tsx usage
+  // Get all documents for current user
   getAllDocuments: async (): Promise<DocumentsResponse> => {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
@@ -232,7 +293,7 @@ export const documentsApi = {
     return response;
   },
 
-  // Added to match Dashboard.tsx usage
+  // Upload documents
   uploadDocuments: async (formData: FormData): Promise<any> => {
     const response = await api.post('/documents/upload', formData, {
       headers: {
@@ -240,24 +301,48 @@ export const documentsApi = {
       },
     });
     return response;
-  }
+  },
+
+  // Verify document IDs before sending a query
+  verifyDocumentIds: async (docIds: string[]): Promise<string[]> => {
+    const userId = await getUserId();
+    if (!userId) throw new Error('User not authenticated');
+    
+    // Array to store valid document IDs
+    const validDocIds: string[] = [];
+    
+    // Check each document ID
+    for (const docId of docIds) {
+      try {
+        // Try to get the document status using the user_id/doc_id endpoint
+        const response = await api.get(`/documents/${userId}/${docId}/status`);
+        // If successful (no error thrown), add to valid IDs
+        if (response.data && response.data.is_ready) {
+          validDocIds.push(docId);
+        } else if (response.data) {
+          // Document exists but is not ready
+          console.log(`Document ${docId} found but not ready (status: ${response.data.status})`);
+        }
+      } catch (error) {
+        console.log(`Document ${docId} not found or not ready, skipping`);
+        // Skip this document ID
+      }
+    }
+    
+    console.log(`Verified ${validDocIds.length} out of ${docIds.length} document IDs as valid`);
+    return validDocIds;
+  },
 };
 
 interface QueryRequest {
   query: string;
   session_id: string;
   user_id?: string;
-  document_ids?: string[]; // Match Dashboard.tsx usage
-  doc_ids?: string[];      // Alternative property name
+  document_ids?: string[];
+  doc_ids?: string[];
   k?: number;
 }
 
-interface QueryResponseData {
-  id: string;
-  answer: string;
-  context?: string[];
-  source_documents?: string[];
-}
 
 // Query API
 export const queryApi = {
@@ -268,26 +353,74 @@ export const queryApi = {
     
     const response = await api.post('/query/', {
       query,
-      session_id: sessionId,
       user_id: userId,
+      session_id: sessionId,
       doc_ids: documentIds,
       k
     });
     return response;
   },
 
-  // Added to match Dashboard.tsx usage
+  // Submit query to RAG API
   submitQuery: async (request: QueryRequest): Promise<QueryResponse> => {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
     
-    request.user_id = userId;
-    // Handle both document_ids and doc_ids for flexibility
-    if (request.document_ids && !request.doc_ids) {
-      request.doc_ids = request.document_ids;
+    try {
+      // Deduplicate document IDs first
+      const uniqueDocIds = Array.from(new Set(request.doc_ids || []));
+      
+      // Verify document IDs exist on the server
+      const validDocIds = await documentsApi.verifyDocumentIds(uniqueDocIds);
+      
+      // Always allow queries even with no documents (for general questions)
+      console.log(`Query validation: ${validDocIds.length} valid documents out of ${uniqueDocIds.length} requested`);
+      
+      // Create a properly structured payload matching Postman's successful format
+      // Parameter order matters: query, user_id, session_id, doc_ids, k
+      const payload = {
+        query: request.query,
+        user_id: userId,
+        session_id: request.session_id,
+        doc_ids: validDocIds, // Use valid document IDs (may be empty array)
+        k: request.k || 4
+      };
+      
+      console.log('Sending query to API endpoint: /query', {
+        userId: payload.user_id,
+        sessionId: payload.session_id,
+        docIds: payload.doc_ids.length,
+        queryLength: payload.query?.length || 0
+      });
+      
+      const startTime = Date.now();
+      const response = await api.post('/query', payload); // Remove trailing slash to match Postman
+      const elapsedTime = Date.now() - startTime;
+      
+      console.log(`Query API response received in ${elapsedTime}ms`, { 
+        status: response.status,
+        statusText: response.statusText,
+        hasResponse: !!response.data?.response 
+      });
+      
+      return response;
+    } catch (error: any) {
+      console.error('Query API error:', error);
+      if (error.response) {
+        // Check if error is related to API rate limiting or quota
+        const errorDetail = error.response.data?.detail || '';
+        if (errorDetail.includes('quota') || 
+            errorDetail.includes('rate limit') || 
+            errorDetail.includes('429') ||
+            errorDetail.includes('exceeded')) {
+          // Create a more user-friendly error for rate limiting
+          const quotaError = new Error('AI service quota exceeded. Please try again later or contact support.');
+          quotaError.name = 'QuotaExceededError';
+          throw quotaError;
+        }
+      }
+      throw error;
     }
-    const response = await api.post('/query/', request);
-    return response;
   }
 };
 
@@ -300,8 +433,18 @@ interface HealthResponse {
 // Health check
 export const healthApi = {
   check: async (): Promise<HealthResponse> => {
-    const response = await api.get('/health');
-    return response.data;
+    // Use a simple GET request without authentication for health check
+    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    console.log('Health check using baseURL:', baseUrl);
+    
+    try {
+      const response = await axios.get(`${baseUrl}/health`);
+      console.log('Health check response:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('Health check failed:', error);
+      throw error;
+    }
   }
 };
 

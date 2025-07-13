@@ -120,6 +120,52 @@ class DocumentService:
             print(f"Error getting document by ID: {e}")
             return None
             return None
+    
+    def get_document(self, doc_id: str, user_id: str = None) -> Dict[str, Any]:
+        """Get document information from database"""
+        try:
+            # Query for document in Supabase
+            query = supabase.table('documents').select('*').eq('id', doc_id)
+            response = query.execute()
+            
+            # Check if document was found
+            if response.data and len(response.data) > 0:
+                document = response.data[0]
+                
+                # If user_id is provided, verify document is associated with user through document_sessions
+                if user_id:
+                    # Check if this document is associated with any session belonging to this user
+                    session_query = supabase.table('document_sessions').select('*') \
+                        .eq('document_id', doc_id) \
+                        .execute()
+                    
+                    if session_query.data and len(session_query.data) > 0:
+                        # Get all session IDs associated with this document
+                        session_ids = [s['session_id'] for s in session_query.data]
+                        
+                        # Check if any of these sessions belong to the user
+                        user_sessions = supabase.table('sessions').select('*') \
+                            .in_('id', session_ids) \
+                            .eq('user_id', user_id) \
+                            .execute()
+                        
+                        if user_sessions.data and len(user_sessions.data) > 0:
+                            # Document is associated with user
+                            return document
+                        else:
+                            # Document exists but doesn't belong to user
+                            print(f"Document {doc_id} exists but is not associated with user {user_id}")
+                            return None
+                    else:
+                        # Document exists but not associated with any session
+                        return document
+                else:
+                    # No user filter, just return the document
+                    return document
+            return None
+        except Exception as e:
+            print(f"Error retrieving document from database: {str(e)}")
+            return None
 
 # Global instance
 document_service = DocumentService()

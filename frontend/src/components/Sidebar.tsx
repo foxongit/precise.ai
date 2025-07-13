@@ -151,7 +151,7 @@ export default function Sidebar({
                       <p className="text-gray-400 text-sm py-2">No chats yet</p>
                     ) : (
                       filteredChats.map((chat: Chat) => (
-                        <div key={chat.id} className="group relative">
+                        <div key={`chat-${chat.id}`} className="group relative">
                           <button
                             onClick={() => switchToChat(chat)}
                             className={`w-full cursor-pointer flex items-center space-x-3 p-2 rounded-lg transition-colors ${
@@ -255,7 +255,7 @@ export default function Sidebar({
                   ) : (
                     <>
                       {filteredFiles.map((file: UploadedFile) => (
-                        <div key={file.id} className="group flex items-center space-x-2 p-2 rounded-lg hover:bg-gray-700 transition-colors">
+                        <div key={`doc-${file.id}`} className="group flex items-center space-x-2 p-2 rounded-lg hover:bg-gray-700 transition-colors">
                           {/* Document info */}
                           <button 
                             onClick={() => viewDocument(file)}

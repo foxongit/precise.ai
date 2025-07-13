@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
@@ -25,6 +26,28 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI(title="RAG Document Processing API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",  # Vite frontend
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Import API routers
+from src.api import documents, sessions, query
+
+# Include API routers
+app.include_router(documents.router)
+app.include_router(sessions.router)
+app.include_router(query.router)
 
 # Pydantic models for request/response
 class QueryRequest(BaseModel):
@@ -502,6 +525,66 @@ async def process_query(request: QueryRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
 
+@app.post("/query-test")
+async def process_query_test(request: QueryRequest):
+    """Test query endpoint without session verification for debugging"""
+    
+    try:
+        print(f"Test query endpoint received request: {request}")
+        
+        # Check if all requested documents are ready
+        not_ready_docs = []
+        for doc_id in request.doc_ids:
+            if doc_id in document_status:
+                status = document_status[doc_id]["status"]
+                if status == "processing":
+                    not_ready_docs.append(f"{doc_id} (processing)")
+                elif status == "failed":
+                    not_ready_docs.append(f"{doc_id} (failed)")
+        
+        if not_ready_docs:
+            return JSONResponse(
+                status_code=202,  # Accepted but not ready
+                content={
+                    "status": "not_ready",
+                    "message": f"Some documents are not ready: {', '.join(not_ready_docs)}",
+                    "not_ready_docs": not_ready_docs,
+                    "suggestion": "Please wait for document processing to complete or check status endpoints"
+                }
+            )
+        
+        # Process the query through RAG pipeline
+        result = rag_pipeline.process_query(
+            query=request.query,
+            user_id=request.user_id,
+            doc_ids=request.doc_ids,
+            k=request.k
+        )
+        
+        if result["status"] == "success":
+            response_data = {
+                "status": result["status"],
+                "original_query": result["original_query"],
+                "enriched_query": result["enriched_query"],
+                "retrieved_chunks": result["retrieved_chunks"],
+                "masked_chunks": result["masked_chunks"],
+                "response": result["response"],
+                "retrieved_metadata": result["retrieved_metadata"],
+                "processed_docs": result["processed_docs"],
+                "test_mode": True
+            }
+            
+            return JSONResponse(
+                status_code=200,
+                content=response_data
+            )
+        else:
+            raise HTTPException(status_code=500, detail=result["message"])
+            
+    except Exception as e:
+        print(f"Test query endpoint error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -511,20 +594,41 @@ async def health_check():
 async def get_document_status(user_id: str, doc_id: str):
     """Get the processing status of a document"""
     
-    if doc_id not in document_status:
-        raise HTTPException(status_code=404, detail="Document not found or status not available")
+    # First check in-memory status
+    if doc_id in document_status:
+        status_info = document_status[doc_id]
+        
+        return {
+            "doc_id": doc_id,
+            "user_id": user_id,
+            "status": status_info["status"],
+            "message": status_info["message"],
+            "chunks_added": status_info.get("chunks_added", 0),
+            "timestamp": status_info["timestamp"],
+            "is_ready": status_info["status"] == "completed"
+        }
     
-    status_info = document_status[doc_id]
+    # If not in memory, check if document exists in the database
+    try:
+        # Check if document exists in Supabase (without user_id filter)
+        doc_query = supabase.table('documents').select('*').eq('id', doc_id).execute()
+        
+        if doc_query.data and len(doc_query.data) > 0:
+            # Document exists in database, assume it's completed
+            return {
+                "doc_id": doc_id,
+                "user_id": user_id,
+                "status": "completed",
+                "message": "Document processed successfully",
+                "chunks_added": 0,  # We don't know how many chunks without the in-memory data
+                "timestamp": datetime.now().isoformat(),
+                "is_ready": True
+            }
+    except Exception as e:
+        print(f"Error checking document in database: {str(e)}")
     
-    return {
-        "doc_id": doc_id,
-        "user_id": user_id,
-        "status": status_info["status"],
-        "message": status_info["message"],
-        "chunks_added": status_info.get("chunks_added", 0),
-        "timestamp": status_info["timestamp"],
-        "is_ready": status_info["status"] == "completed"
-    }
+    # If we get here, the document was not found
+    raise HTTPException(status_code=404, detail="Document not found or status not available")
 
 @app.post("/sessions", response_model=SessionResponse)
 async def create_chat_session(request: CreateSessionRequest):

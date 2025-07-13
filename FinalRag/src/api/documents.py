@@ -294,17 +294,39 @@ async def delete_document(user_id: str, doc_id: str):
 async def get_document_status(user_id: str, doc_id: str):
     """Get the processing status of a document"""
     
-    status_info = document_service.get_document_status(doc_id)
+    # First try to get status from document service
+    status = document_service.get_document_status(doc_id)
     
-    if status_info is None:
-        raise HTTPException(status_code=404, detail="Document not found or status not available")
+    if status:
+        return {
+            "doc_id": doc_id,
+            "user_id": user_id,
+            "status": status["status"],
+            "message": status["message"],
+            "chunks_added": status.get("chunks_added", 0),
+            "timestamp": status["timestamp"],
+            "is_ready": status["status"] == "completed"
+        }
     
-    return {
-        "doc_id": doc_id,
-        "user_id": user_id,
-        "status": status_info["status"],
-        "message": status_info["message"],
-        "chunks_added": status_info.get("chunks_added", 0),
-        "timestamp": status_info["timestamp"],
-        "is_ready": status_info["status"] == "completed"
-    }
+    # If not in document service memory, check if document exists in the database
+    try:
+        # First check if the document exists at all
+        document = document_service.get_document(doc_id)
+        
+        if document:
+            # Optionally verify it's associated with the user
+            # This is less strict - if the document exists, assume it's ready
+            return {
+                "doc_id": doc_id,
+                "user_id": user_id,
+                "status": "completed",
+                "message": "Document processed successfully",
+                "chunks_added": 0,  # We don't know how many chunks since status was lost
+                "timestamp": document.get("updated_at") or document.get("upload_date") or datetime.now().isoformat(),
+                "is_ready": True
+            }
+    except Exception as e:
+        print(f"Error checking document in database: {str(e)}")
+    
+    # Document not found
+    raise HTTPException(status_code=404, detail="Document not found or status not available")

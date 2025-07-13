@@ -13,3 +13,5 @@ supabase
 pdfplumber
 langchain_chroma
 sentence-transformers
+langchain-google-genai
+google-generativeai
