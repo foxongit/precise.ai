@@ -341,3 +341,72 @@ async def get_document_status(user_id: str, doc_id: str):
     
     # Document not found
     raise HTTPException(status_code=404, detail="Document not found or status not available")
+
+@router.get("/{user_id}/{doc_id}/url")
+async def get_document_url(user_id: str, doc_id: str):
+    """Generate a signed URL for document viewing"""
+    try:
+        # Get document from database
+        document = document_service.get_document(doc_id, user_id)
+        
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found or doesn't belong to user")
+        
+        storage_path = document.get('storage_path')
+        if not storage_path:
+            raise HTTPException(status_code=404, detail="Document storage path not found")
+        
+        # Generate signed URL from Supabase Storage
+        signed_url = document_service.generate_signed_url(storage_path)
+        
+        if signed_url:
+            return {
+                "doc_id": doc_id,
+                "user_id": user_id,
+                "url": signed_url,
+                "expires_in": 3600,  # 1 hour
+                "filename": document.get('filename', 'document.pdf')
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to generate document URL")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating document URL: {str(e)}")
+
+@router.get("/{user_id}/urls")
+async def get_all_document_urls(user_id: str, session_id: Optional[str] = None):
+    """Generate signed URLs for all user documents"""
+    try:
+        # Get all documents for user/session
+        documents = document_service.get_user_documents(user_id, session_id)
+        
+        if documents is None:
+            raise HTTPException(status_code=404, detail="Session not found or doesn't belong to user")
+        
+        urls = {}
+        for document in documents:
+            doc_id = document.get('id')
+            storage_path = document.get('storage_path')
+            
+            if doc_id and storage_path:
+                signed_url = document_service.generate_signed_url(storage_path)
+                if signed_url:
+                    urls[doc_id] = {
+                        "url": signed_url,
+                        "filename": document.get('filename', 'document.pdf'),
+                        "expires_in": 3600
+                    }
+        
+        return {
+            "user_id": user_id,
+            "session_id": session_id,
+            "urls": urls,
+            "total_urls": len(urls)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating document URLs: {str(e)}")

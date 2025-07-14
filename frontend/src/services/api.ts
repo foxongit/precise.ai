@@ -487,4 +487,26 @@ export const healthApi = {
   }
 };
 
+// Document URL generation API calls
+export const documentsUrlApi = {
+  // Get signed URL for a specific document
+  getDocumentUrl: async (docId: string): Promise<{ data: { url: string; filename: string; expires_in: number } }> => {
+    const userId = await getUserId();
+    if (!userId) throw new Error('User not authenticated');
+    
+    const response = await api.get(`/documents/${userId}/${docId}/url`);
+    return response;
+  },
+
+  // Get signed URLs for all documents in a session
+  getAllDocumentUrls: async (sessionId?: string): Promise<{ data: { urls: Record<string, { url: string; filename: string; expires_in: number }> } }> => {
+    const userId = await getUserId();
+    if (!userId) throw new Error('User not authenticated');
+    
+    const params = sessionId ? `?session_id=${sessionId}` : '';
+    const response = await api.get(`/documents/${userId}/urls${params}`);
+    return response;
+  }
+};
+
 export default api;

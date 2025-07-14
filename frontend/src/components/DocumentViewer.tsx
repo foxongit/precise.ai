@@ -65,28 +65,72 @@ export default function DocumentViewer({
   // Handle container resize for responsive behavior
   useEffect(() => {
     const updateDimensions = () => {
-      if (containerRef.current) {
-        // Force iframe refresh when container size changes
-        const iframes = containerRef.current.querySelectorAll('iframe');
-        iframes.forEach((iframe) => {
-          // Trigger a re-render by toggling display
+      if (!containerRef.current) return;
+      
+      // Force iframe refresh and resize when container size changes
+      const iframes = containerRef.current.querySelectorAll('iframe');
+      iframes.forEach((iframe) => {
+        // Update iframe dimensions to match container
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        
+        // For PDF files, add parameters to fit content to new dimensions
+        const currentSrc = iframe.src;
+        if (currentSrc && (currentSrc.includes('.pdf') || iframe.title.toLowerCase().includes('.pdf'))) {
+          // Create new URL with fit parameters for better responsive behavior
+          const baseUrl = currentSrc.split('#')[0]; // Remove existing hash
+          const newUrl = `${baseUrl}#toolbar=0&navpanes=0&scrollbar=1&view=FitH&zoom=page-width`;
+          
+          // Only update if URL changed to avoid unnecessary reloads
+          if (iframe.src !== newUrl) {
+            iframe.src = newUrl;
+          }
+        }
+        
+        // Trigger a re-render by toggling display for other file types
+        else if (currentSrc && !currentSrc.includes('.pdf')) {
           iframe.style.display = 'none';
           iframe.offsetHeight; // Trigger reflow
-          iframe.style.display = '';
-        });
-      }
+          iframe.style.display = 'block';
+        }
+      });
+      
+      // Handle images - ensure they scale properly with container
+      const images = containerRef.current.querySelectorAll('img');
+      images.forEach((img) => {
+        img.style.maxWidth = '100%';
+        img.style.maxHeight = '100%';
+        img.style.width = 'auto';
+        img.style.height = 'auto';
+        img.style.objectFit = 'contain';
+      });
+    };
+
+    // Debounced resize handler to avoid too frequent updates
+    let resizeTimeout: NodeJS.Timeout;
+    const debouncedUpdate = () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(updateDimensions, 100); // Reduced delay for better responsiveness
     };
 
     // Create ResizeObserver to watch for container changes
-    const resizeObserver = new ResizeObserver(updateDimensions);
+    const resizeObserver = new ResizeObserver(debouncedUpdate);
     if (containerRef.current) {
       resizeObserver.observe(containerRef.current);
     }
 
+    // Also listen for window resize events as backup
+    window.addEventListener('resize', debouncedUpdate);
+
+    // Initial update
+    updateDimensions();
+
     return () => {
       resizeObserver.disconnect();
+      window.removeEventListener('resize', debouncedUpdate);
+      clearTimeout(resizeTimeout);
     };
-  }, []);
+  }, [file.s3Url]); // Re-run when file changes
 
   const renderDocumentContent = () => {
     if (!file.s3Url) {
@@ -112,12 +156,14 @@ export default function DocumentViewer({
       case 'pdf':
         return (
           <iframe
-            src={`${file.s3Url}#toolbar=0&navpanes=0&scrollbar=1`}
+            src={`${file.s3Url}#toolbar=0&navpanes=0&scrollbar=1&view=FitH&zoom=page-width`}
             className="w-full h-full border-0"
             title={file.name}
             style={{ 
               minHeight: '100%',
-              resize: 'none'
+              resize: 'none',
+              border: 'none',
+              outline: 'none'
             }}
           />
         );
@@ -127,11 +173,13 @@ export default function DocumentViewer({
         return (
           <iframe
             src={file.s3Url}
-            className="w-full h-full border-0"
+            className="w-full h-full border-0 bg-white"
             title={file.name}
             style={{ 
               minHeight: '100%',
-              resize: 'none'
+              resize: 'none',
+              border: 'none',
+              outline: 'none'
             }}
           />
         );
@@ -248,7 +296,7 @@ export default function DocumentViewer({
       case 'xls':
       case 'xlsx':
         return (
-          <div className="w-full h-full overflow-hidden">
+          <div className="w-full h-full overflow-hidden bg-white">
             <iframe
               src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(file.s3Url)}`}
               className="w-full h-full border-0"
@@ -256,8 +304,8 @@ export default function DocumentViewer({
               style={{ 
                 minHeight: '100%',
                 resize: 'none',
-                transform: 'scale(1)',
-                transformOrigin: 'top left'
+                border: 'none',
+                outline: 'none'
               }}
             />
           </div>
@@ -266,7 +314,7 @@ export default function DocumentViewer({
       case 'doc':
       case 'docx':
         return (
-          <div className="w-full h-full overflow-hidden">
+          <div className="w-full h-full overflow-hidden bg-white">
             <iframe
               src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(file.s3Url)}`}
               className="w-full h-full border-0"
@@ -274,8 +322,8 @@ export default function DocumentViewer({
               style={{ 
                 minHeight: '100%',
                 resize: 'none',
-                transform: 'scale(1)',
-                transformOrigin: 'top left'
+                border: 'none',
+                outline: 'none'
               }}
             />
           </div>
@@ -287,16 +335,21 @@ export default function DocumentViewer({
       case 'gif':
       case 'webp':
         return (
-          <div className="w-full h-full flex items-center justify-center bg-gray-50 overflow-hidden p-4">
+          <div className="w-full h-full flex items-center justify-center bg-gray-50 overflow-hidden p-2">
             <img
               src={file.s3Url}
               alt={file.name}
-              className="object-contain"
+              className="object-contain transition-all duration-200"
               style={{ 
                 maxWidth: '100%',
                 maxHeight: '100%',
                 width: 'auto',
                 height: 'auto'
+              }}
+              onLoad={(e) => {
+                // Ensure image scales properly after loading
+                const img = e.target as HTMLImageElement;
+                img.style.objectFit = 'contain';
               }}
             />
           </div>
@@ -306,11 +359,13 @@ export default function DocumentViewer({
         return (
           <iframe
             src={file.s3Url}
-            className="w-full h-full border-0"
+            className="w-full h-full border-0 bg-white"
             title={file.name}
             style={{ 
               minHeight: '100%',
-              resize: 'none'
+              resize: 'none',
+              border: 'none',
+              outline: 'none'
             }}
           />
         );
