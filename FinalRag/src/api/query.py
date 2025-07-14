@@ -48,10 +48,9 @@ async def process_query(request: QueryRequest):
         )
         
         if result["status"] == "success":
-            # Save chat log to database
-            chat_log_result = session_service.save_chat_log(
+            # Save only the AI response to database (user prompt is saved separately by frontend)
+            chat_log_result = session_service.save_ai_response(
                 session_id=request.session_id,
-                prompt=request.query,
                 response=result["response"]
             )
             

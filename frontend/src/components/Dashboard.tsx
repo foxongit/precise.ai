@@ -157,13 +157,20 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       newChatMessages[conversationId] = conversationChats;
     });
     
-    setChatMessages(newChatMessages);
+    // Only update the cache if there are actual changes
+    const hasChanges = Object.keys(newChatMessages).some(id => 
+      JSON.stringify(newChatMessages[id]) !== JSON.stringify(chatMessages[id])
+    );
     
-    // If we have data for the current conversation, stop the switching animation
-    if (currentConversationId && newChatMessages[currentConversationId]) {
-      setIsSwitchingChat(false);
+    if (hasChanges) {
+      setChatMessages(newChatMessages);
+      
+      // If we have data for the current conversation, stop the switching animation
+      if (currentConversationId && newChatMessages[currentConversationId] && isSwitchingChat) {
+        setIsSwitchingChat(false);
+      }
     }
-  }, [supabaseChats, currentConversationId]);
+  }, [supabaseChats, currentConversationId, chatMessages, isSwitchingChat]);
 
   const currentChat = useMemo(() => {
     if (!currentConversationId) return null;
@@ -171,37 +178,41 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     // Find the chat in the chats array
     const foundChat = chats.find(chat => chat.id === currentConversationId);
     
+    // If we found the chat, return it
+    if (foundChat) {
+      return foundChat;
+    }
+    
     // If we're switching and haven't found the chat yet, return a stable placeholder
-    if (isSwitchingChat && !foundChat) {
-      // Return a placeholder chat with empty messages to prevent welcome screen flickering
+    if (isSwitchingChat) {
+      // Check if we have any conversation data for this ID
+      const conversation = conversations.find(conv => conv.id === currentConversationId);
+      
       return {
         id: currentConversationId,
-        title: 'Loading...',
+        title: conversation?.title || conversation?.name || 'Loading...',
         messages: [],
         lastMessage: new Date(),
-        document_uuid: []
+        document_uuid: conversation?.document_uuid || []
       };
     }
     
-    return foundChat || null;
-  }, [chats, currentConversationId, isSwitchingChat]);
+    return null;
+  }, [chats, currentConversationId, isSwitchingChat, conversations]);
 
   // Determine if we should show the welcome screen
   const shouldShowWelcomeScreen = useMemo(() => {
-    // Show welcome screen if:
-    // 1. No conversation is selected
+    // Always show welcome screen if no conversation is selected
     if (!currentConversationId) return true;
     
-    // 2. We're still switching chats (don't show welcome screen while switching)
+    // Never show welcome screen if we're switching chats
     if (isSwitchingChat) return false;
     
-    // 3. Chat exists but has no messages (and we're not in a loading state)
-    if (currentChat && currentChat.messages.length === 0 && !isLoading) {
-      return true;
-    }
+    // Never show welcome screen if we don't have a current chat object
+    if (!currentChat) return false;
     
-    // 4. No chat found (but we're not switching) - this shouldn't happen often
-    return !currentChat && !isSwitchingChat;
+    // Show welcome screen only if chat exists, has no messages, and we're not loading
+    return currentChat.messages.length === 0 && !isLoading;
   }, [currentConversationId, currentChat, isLoading, isSwitchingChat]);
 
   // Convert documents to UploadedFile format for compatibility using useMemo
@@ -517,20 +528,15 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       
       // Set conversation ID IMMEDIATELY after creation
       setCurrentConversationId(newConversationId);
-        // Clear input and set loading state
+      // Clear input and set loading state
       setInputValue('');
       setIsLoading(true);
 
-      // IMPORTANT: First, ensure the message itself gets saved to the chat log
+      // IMPORTANT: First, save the user message to chat log
       // This ensures the user's message is always saved even if AI generation fails
       try {
-        console.log('First, explicitly saving user message to chat log');
-        await queryApi.processQuery(
-          userMessageContent,
-          newConversationId,
-          documentsToAssociate,
-          4 // Default k value
-        );
+        console.log('Saving user message to chat log');
+        await sessionsApi.saveUserMessage(newConversationId, userMessageContent);
         
         // Small delay to ensure message is saved
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -555,27 +561,18 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         if (queryResponse && queryResponse.data && queryResponse.data.response) {
           console.log('AI response received successfully');
         } else {
-          console.log('Query API returned empty response, falling back to default behavior');
-          // If API doesn't return a response, we already saved the user message,
-          // so we don't need to call processQuery again
+          console.log('Query API returned empty response, saving default response');
+          // Save a default response if AI doesn't respond
+          await sessionsApi.saveAIResponse(newConversationId, "I'm having trouble processing your request right now. Please try again.");
         }
       } catch (error) {
         console.error('Failed to get AI response:', error);
-        // Use a fallback method to save a default response if the AI generation failed
+        // Save an error response if the AI generation failed
         try {
-          console.log('Attempting fallback method to save a default AI response');
-          const fallbackResponse = await queryApi.processQuery(
-            userMessageContent, 
-            newConversationId, 
-            documentsToAssociate,
-            4 // Default k value
-          );
-          
-          console.log('Fallback response saved successfully', fallbackResponse);
-        } catch (fallbackError) {
-          console.error('Fallback API call also failed:', fallbackError);
-          // Even if both attempts fail, we've already saved the user's message earlier,
-          // so at least that will be displayed in the UI
+          console.log('Saving error response to chat log');
+          await sessionsApi.saveAIResponse(newConversationId, "I'm sorry, I encountered an error while processing your request. Please try again.");
+        } catch (logError) {
+          console.error('Failed to save error response:', logError);
         }
       }
       
@@ -617,6 +614,11 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     // Set loading state immediately when switching
     setIsSwitchingChat(true);
     setCurrentConversationId(chat.id);
+    
+    // Add a failsafe timeout to prevent stuck loading state
+    setTimeout(() => {
+      setIsSwitchingChat(false);
+    }, 5000); // 5 second timeout
   };
 
   const deleteChat = async (chatId: string) => {
@@ -693,16 +695,19 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       // Set loading state immediately when switching conversations
       setIsSwitchingChat(true);
       
-      // Small delay to ensure any pending database operations are complete
-      const timeoutId = setTimeout(async () => {
+      // Initiate the chat refresh
+      const refreshChat = async () => {
         try {
           await refreshChats();
         } catch (error) {
           console.error('Error refreshing chats:', error);
-        } finally {
+          // Even if refresh fails, stop the loading state
           setIsSwitchingChat(false);
         }
-      }, 100);
+      };
+      
+      // Small delay to ensure any pending database operations are complete
+      const timeoutId = setTimeout(refreshChat, 100);
       
       return () => {
         clearTimeout(timeoutId);
@@ -893,6 +898,10 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       console.log('Available documents:', uploadedFiles.map(f => ({ id: f.id, name: f.name })));          // Use selected document IDs as they are
 
       try {
+        // First, save the user message to chat log
+        console.log('Saving user message to chat log');
+        await sessionsApi.saveUserMessage(conversationId, userMessage);
+        
         // Use the RAG API if documents are selected and backend is available
         if (selectedDocIds.length > 0 && isBackendAvailable) {
           console.log('Using RAG query API with documents:', selectedDocIds);
@@ -923,23 +932,24 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
               console.log('AI response extracted:', queryResponse.data.response);
             } else {
               console.error('Invalid response structure:', queryResponse);
-              throw new Error('No response from RAG API');
+              // Save a default response if AI doesn't respond
+              await sessionsApi.saveAIResponse(conversationId, "I'm having trouble processing your request right now. Please try again.");
             }
           } catch (apiError) {
             console.error('API call failed:', apiError);
-            throw apiError;
+            // Save an error response if the API fails
+            await sessionsApi.saveAIResponse(conversationId, "I'm sorry, I encountered an error while processing your request. Please try again.");
           }
         } else {
           // Fallback response when no documents are selected or backend unavailable
           if (selectedDocIds.length === 0) {
-            console.log("No documents selected, displaying standard message");
+            console.log("No documents selected, saving general response");
+            await sessionsApi.saveAIResponse(conversationId, "I'd be happy to help! Please upload some documents so I can provide more specific assistance, or ask me a general question.");
           } else {
-            console.log("Backend unavailable, displaying error message");
+            console.log("Backend unavailable, saving error response");
+            await sessionsApi.saveAIResponse(conversationId, "I'm currently unable to process your request. Please check your connection and try again.");
           }
         }
-        
-        // Chat log is automatically saved by the query API
-        console.log('Chat log will be saved by the query API');
         
         // Add a small delay for data consistency
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -949,15 +959,12 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         setIsLoading(false);
         
       } catch (error) {
-        console.error('Error using RAG API:', error);
+        console.error('Error processing message:', error);
         setIsLoading(false);
         
-        // Show and save error message to user via backend API
+        // Save error message to user
         try {
-          // Create a minimal query request that will be recorded in the backend
-          // The backend will handle storing the appropriate error message
-          await queryApi.processQuery(userMessage, conversationId, selectedDocumentsForAnalysis);
-          
+          await sessionsApi.saveAIResponse(conversationId, "I'm sorry, I encountered an error while processing your request. Please try again.");
           await refreshChats();
         } catch (logError) {
           console.error('Failed to save error response:', logError);

@@ -290,6 +290,17 @@ async def delete_document(user_id: str, doc_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")
 
+@router.delete("/{doc_id}")
+async def delete_document(doc_id: str, user_id: str):
+    """Delete a document and all its associated data"""
+    
+    result = document_service.delete_document(doc_id, user_id)
+    
+    if result["success"]:
+        return {"message": "Document deleted successfully"}
+    else:
+        raise HTTPException(status_code=500, detail=result["error"])
+
 @router.get("/{user_id}/{doc_id}/status")
 async def get_document_status(user_id: str, doc_id: str):
     """Get the processing status of a document"""

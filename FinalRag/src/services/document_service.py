@@ -166,6 +166,44 @@ class DocumentService:
         except Exception as e:
             print(f"Error retrieving document from database: {str(e)}")
             return None
+    
+    def delete_document(self, doc_id: str, user_id: str) -> Dict[str, Any]:
+        """Delete a document and all its associated data"""
+        try:
+            # First verify document exists and belongs to user
+            document = self.get_document(doc_id, user_id)
+            if not document:
+                return {"success": False, "error": "Document not found or doesn't belong to user"}
+            
+            # Delete from RAG pipeline/vector store
+            from src.services.rag_pipeline.pipeline import rag_pipeline
+            rag_result = rag_pipeline.delete_document(doc_id, user_id)
+            
+            # Delete from Supabase storage
+            try:
+                storage_path = document.get('storage_path')
+                if storage_path:
+                    supabase.storage.from_(SUPABASE_BUCKET).remove([storage_path])
+            except Exception as e:
+                print(f"Warning: Could not delete from storage: {e}")
+            
+            # Delete all document-session links
+            supabase.table('document_sessions').delete().eq('document_id', doc_id).execute()
+            
+            # Delete the document record
+            db_response = supabase.table('documents').delete().eq('id', doc_id).execute()
+            
+            # Clean up status tracking
+            if doc_id in self.document_status:
+                del self.document_status[doc_id]
+            
+            return {
+                "success": True,
+                "message": "Document deleted successfully",
+                "doc_id": doc_id
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
 # Global instance
 document_service = DocumentService()

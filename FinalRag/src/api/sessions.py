@@ -96,3 +96,45 @@ async def unlink_document_from_session(session_id: str, document_id: str, user_i
         return {"message": result["message"]}
     else:
         raise HTTPException(status_code=500, detail=result["error"])
+
+@router.post("/{session_id}/chat-log")
+async def save_chat_log(session_id: str, request: dict):
+    """Save a chat log entry (user message or AI response)"""
+    
+    # Verify session belongs to user
+    if not session_service.verify_session(session_id, request.get("user_id")):
+        raise HTTPException(status_code=404, detail="Session not found or doesn't belong to user")
+    
+    # Extract prompt and response from request
+    prompt = request.get("prompt", "")
+    response = request.get("response", "")
+    
+    if not prompt and not response:
+        raise HTTPException(status_code=400, detail="Either prompt or response must be provided")
+    
+    result = session_service.save_chat_log(session_id, prompt, response)
+    
+    if result["success"]:
+        return {
+            "success": True,
+            "chat_log_id": result["chat_log_id"],
+            "session_id": session_id,
+            "message": "Chat log saved successfully"
+        }
+    else:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+@router.delete("/{session_id}")
+async def delete_session(session_id: str, user_id: str):
+    """Delete a session"""
+    
+    # Verify session belongs to user
+    if not session_service.verify_session(session_id, user_id):
+        raise HTTPException(status_code=404, detail="Session not found or doesn't belong to user")
+    
+    result = session_service.delete_session(session_id, user_id)
+    
+    if result["success"]:
+        return {"message": "Session deleted successfully"}
+    else:
+        raise HTTPException(status_code=500, detail=result["error"])
