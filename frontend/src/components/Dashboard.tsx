@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MessageSquare, Paperclip, Send, ChevronDown, Upload, Eye, EyeOff } from 'lucide-react';
 import type { User } from '@supabase/supabase-js'; // Keep for type definitions only
 // @ts-ignore - TypeScript can't find these modules, but they exist
-import { useConversations, useChats, useDocuments } from '../hooks/useSupabase';
+import { useConversations, useChats, useDocuments, Conversation, Document } from '../hooks/useSupabase';
 import { queryApi, healthApi, documentsApi, sessionsApi } from '../services/api';
 import Sidebar from './Sidebar';
 import DocumentViewer from './DocumentViewer';
@@ -42,7 +42,13 @@ interface UploadedFile {
 // Main Chat Interface Component
 export default function Dashboard({ user, onLogout }: DashboardProps) {
   // Supabase hooks
-  const { conversations, createConversation, updateConversation, deleteConversation } = useConversations(user);
+  const { 
+    conversations, 
+    createConversation, 
+    updateConversation, 
+    deleteConversation,
+    loadConversations  // Add loadConversations to our destructuring
+  } = useConversations(user);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const { chats: supabaseChats, refreshChats } = useChats(currentConversationId);
   const { documents, refreshDocuments } = useDocuments(user);
@@ -384,8 +390,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     }
 
     try {
-      const title = generateChatTitle(inputValue);
-      const userMessageContent = inputValue;
+      // Store input value immediately to prevent it from being lost
+      const userMessageContent = inputValue.trim();
+      const title = generateChatTitle(userMessageContent);
       
       console.log('Creating new chat with title:', title);
       
@@ -413,15 +420,25 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       
       // Set conversation ID IMMEDIATELY after creation
       setCurrentConversationId(newConversationId);
-      
-      // Clear input and set loading state
+        // Clear input and set loading state
       setInputValue('');
       setIsLoading(true);
-      
-      // Generate AI response using the query API
-      let aiResponse = '';
+
+      // IMPORTANT: First, ensure the message itself gets saved to the chat log
+      // This ensures the user's message is always saved even if AI generation fails
       try {
-        // Create request with parameters in the order expected by the backend
+        console.log('First, explicitly saving user message to chat log');
+        await queryApi.processQuery(
+          userMessageContent,
+          newConversationId,
+          documentsToAssociate,
+          4 // Default k value
+        );
+        
+        // Small delay to ensure message is saved
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Then generate AI response using the query API
         const queryRequest = {
           query: userMessageContent,
           session_id: newConversationId,
@@ -429,17 +446,40 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           k: 4
         };
         
+        console.log('Sending query to AI for response:', {
+          messageLength: userMessageContent.length,
+          sessionId: newConversationId,
+          documentCount: documentsToAssociate.length
+        });
+        
+        // Send the query to the API
         const queryResponse = await queryApi.submitQuery(queryRequest);
         
         if (queryResponse && queryResponse.data && queryResponse.data.response) {
-          aiResponse = queryResponse.data.response;
           console.log('AI response received successfully');
         } else {
-          aiResponse = "I'm ready to help you analyze your documents. Please let me know what you'd like to know.";
+          console.log('Query API returned empty response, falling back to default behavior');
+          // If API doesn't return a response, we already saved the user message,
+          // so we don't need to call processQuery again
         }
       } catch (error) {
         console.error('Failed to get AI response:', error);
-        aiResponse = "I'm ready to assist you with document analysis. Please upload documents or ask me questions about your existing documents.";
+        // Use a fallback method to save a default response if the AI generation failed
+        try {
+          console.log('Attempting fallback method to save a default AI response');
+          const fallbackResponse = await queryApi.processQuery(
+            userMessageContent, 
+            newConversationId, 
+            documentsToAssociate,
+            4 // Default k value
+          );
+          
+          console.log('Fallback response saved successfully', fallbackResponse);
+        } catch (fallbackError) {
+          console.error('Fallback API call also failed:', fallbackError);
+          // Even if both attempts fail, we've already saved the user's message earlier,
+          // so at least that will be displayed in the UI
+        }
       }
       
       // Chat log is automatically saved by the query API
@@ -478,7 +518,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const deleteChat = async (chatId: string) => {
     try {
       // Find the conversation to get associated documents
-      const conversationToDelete = conversations.find(conv => conv.id === chatId);
+      const conversationToDelete = conversations.find((conv: Conversation) => conv.id === chatId);
       
       if (conversationToDelete && conversationToDelete.document_uuid && conversationToDelete.document_uuid.length > 0) {
         const documentCount = conversationToDelete.document_uuid.length;
@@ -497,12 +537,10 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             const documentToDelete = documents.find(doc => doc.id === documentId);
             
             if (documentToDelete) {
-              // Delete from Supabase storage if it exists
-              const storagePath = documentToDelete.storage_path_supabase || 
-                                 documentToDelete.storage_path_s3 || 
-                                 documentToDelete.storage_path;
-              
-              console.log(`Deleting document via API: ${documentId}`);
+              console.log(`Deleting document via API: ${documentId}`, {
+                filename: documentToDelete.filename,
+                path: documentToDelete.storage_path
+              });
               
               // Use backend API to delete the document
               try {
@@ -603,7 +641,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       console.log('User ID:', user.id);
       
       // Find the document to get storage information
-      const documentToDelete = documents.find(doc => doc.id === documentId);
+      const documentToDelete = documents.find((doc: Document) => doc.id === documentId);
       console.log('Document found in cache:', documentToDelete ? {
         id: documentToDelete.id,
         filename: documentToDelete.filename,
@@ -612,9 +650,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       
       // Remove document from current conversation if exists
       if (currentConversationId) {
-        const currentConv = conversations.find(conv => conv.id === currentConversationId);
+        const currentConv = conversations.find((conv: Conversation) => conv.id === currentConversationId);
         if (currentConv && currentConv.document_uuid) {
-          const updatedDocumentIds = currentConv.document_uuid.filter(id => id !== documentId);
+          const updatedDocumentIds = currentConv.document_uuid.filter((id: string) => id !== documentId);
           await updateConversation(currentConversationId, {
             document_uuid: updatedDocumentIds
           });
@@ -679,7 +717,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       const userMessage = inputValue;
       
       // Check if this is the first message in the conversation and update title if needed
-      const currentConv = conversations.find(conv => conv.id === conversationId);
+      const currentConv = conversations.find((conv: Conversation) => conv.id === conversationId);
       const currentChatMessages = currentChat?.messages || [];
       
       // If this is the first message and the conversation has a generic title, update it
@@ -708,7 +746,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       // Check if message references any documents and update conversation
       const documentReferences = findMentionedDocuments(inputValue);
       if (documentReferences.length > 0) {
-        const conversationData = conversations.find(conv => conv.id === conversationId);
+        const conversationData = conversations.find((conv: Conversation) => conv.id === conversationId);
         if (conversationData) {
           const existingIds = conversationData.document_uuid || [];
           const combinedIds = [...new Set([...existingIds, ...documentReferences])];
@@ -724,7 +762,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       setIsLoading(true);
 
       // Get all documents selected for this conversation
-      const chatData = conversations.find((conv: any) => conv.id === conversationId);
+      const chatData = conversations.find((conv: Conversation) => conv.id === conversationId);
       // Deduplicate document IDs using Set to avoid duplicates
       const selectedDocIds = [...new Set([
         ...(chatData?.document_uuid || []),
@@ -738,8 +776,6 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       console.log('Available documents:', uploadedFiles.map(f => ({ id: f.id, name: f.name })));          // Use selected document IDs as they are
 
       try {
-        let aiResponse = '';
-        
         // Use the RAG API if documents are selected and backend is available
         if (selectedDocIds.length > 0 && isBackendAvailable) {
           console.log('Using RAG query API with documents:', selectedDocIds);
@@ -767,8 +803,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             console.log('Response data:', queryResponse?.data);
             
             if (queryResponse && queryResponse.data && queryResponse.data.response) {
-              aiResponse = queryResponse.data.response;
-              console.log('AI response extracted:', aiResponse);
+              console.log('AI response extracted:', queryResponse.data.response);
             } else {
               console.error('Invalid response structure:', queryResponse);
               throw new Error('No response from RAG API');
@@ -780,9 +815,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         } else {
           // Fallback response when no documents are selected or backend unavailable
           if (selectedDocIds.length === 0) {
-            aiResponse = "I notice you haven't selected any documents for analysis. Please upload and select documents from the sidebar to get AI-powered insights from your content. You can also drag and drop files into the chat area to upload them.";
+            console.log("No documents selected, displaying standard message");
           } else {
-            aiResponse = "I'm sorry, but the document analysis service is currently unavailable. Please check if the backend server is running and try again.";
+            console.log("Backend unavailable, displaying error message");
           }
         }
         
@@ -871,16 +906,48 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       // If no current conversation, create one
       if (!sessionIdToUse) {
         console.log('No current conversation, creating one for document upload');
-        const newConversation = await createConversation('Document Upload', []);
-        sessionIdToUse = newConversation.id;
-        setCurrentConversationId(sessionIdToUse);
-        console.log('Created new conversation with ID:', sessionIdToUse);
+        
+        // Check if there are any existing conversations first that we can reuse
+        // This helps prevent creating duplicate sessions
+        // Make sure we have the latest conversations data
+        await loadConversations(); // Now we can use the loadConversations function from the hook
+        
+        // Find conversations that are empty (no documents or messages)
+        const existingEmptyConversations = conversations.filter(conv => {
+          // No documents attached
+          const noDocuments = !conv.document_uuid || conv.document_uuid.length === 0;
+          
+          // No messages in this conversation
+          const noMessages = !supabaseChats.some(chat => chat.conversation_id === conv.id);
+          
+          return noDocuments && noMessages;
+        });
+        
+        if (existingEmptyConversations.length > 0) {
+          // Reuse the most recent empty conversation
+          const conversationToUse = existingEmptyConversations[0];
+          sessionIdToUse = conversationToUse.id;
+          setCurrentConversationId(sessionIdToUse);
+          console.log('Reusing existing empty conversation:', sessionIdToUse);
+        } else {
+          // Create a new conversation only if no empty ones exist
+          const newConversation = await createConversation('Document Upload', []);
+          sessionIdToUse = newConversation.id;
+          setCurrentConversationId(sessionIdToUse);
+          console.log('Created new conversation with ID:', sessionIdToUse);
+        }
+      }
+      
+      // At this point we should have a valid session ID
+      if (!sessionIdToUse) {
+        throw new Error('Failed to create or get a valid session ID');
       }
       
       // Upload all files using the API (RAG backend)
       for (const file of validFiles) {
         console.log(`Uploading file ${file.name} to session ${sessionIdToUse} via API`);
         try {
+          // Now sessionIdToUse is guaranteed to be string
           const response = await documentsApi.uploadDocument(file, sessionIdToUse);
           const uploadData = response.data as { doc_id?: string };
           

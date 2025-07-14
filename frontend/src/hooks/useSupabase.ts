@@ -4,60 +4,59 @@ import { sessionsApi, documentsApi } from '../services/api';
 
 // Define types for our data based on the actual FinalRag schema
 export interface Conversation {
-  id: string;
-  name: string;
-  user_id: string;
-  created_at: string;
-  updated_at: string;
+  id: string;               // Primary identifier (uses session.id)
+  name: string;             // Session name
+  user_id: string;          // User who owns this conversation
+  created_at: string;       // Creation timestamp
+  updated_at: string;       // Last update timestamp
   // Virtual fields for compatibility with Dashboard
-  title?: string;
-  last_updated?: string;
-  document_uuid?: string[];
+  title?: string;           // Alias for name
+  last_updated?: string;    // Alias for updated_at
+  document_uuid?: string[]; // Associated document IDs
 }
 
 export interface ChatMessage {
-  id: string;
-  session_id: string;
-  prompt: string;
-  response: string;
-  created_at: string;
+  id: string;               // Primary identifier
+  session_id: string;       // Session this message belongs to
+  prompt: string;           // User input
+  response: string;         // AI response
+  created_at: string;       // Creation timestamp
   // Virtual fields for compatibility with Dashboard
-  conversation_id?: string;
-  role?: 'user' | 'assistant';
-  content?: string;
-  step?: number;
+  conversation_id?: string; // Alias for session_id
+  role?: 'user' | 'assistant'; // Message sender
+  content?: string;         // Alias for prompt or response
+  step?: number;            // Ordering within conversation
 }
 
 export interface Document {
-  id: string;
-  filename: string;
-  storage_path: string;
-  upload_date: string;
-  created_at: string;
-  updated_at: string;
+  id: string;               // Primary identifier
+  filename: string;         // Original file name
+  storage_path: string;     // Path to stored file
+  upload_date: string;      // Date uploaded
+  created_at: string;       // Creation timestamp
+  updated_at: string;       // Last update timestamp
   // Virtual fields for compatibility with Dashboard
-  user_id?: string;
-  title?: string;
-  content_type?: string;
-  storage_path_supabase?: string;
-  storage_path_s3?: string;
-  metadata?: any;
-  status?: string;
+  user_id?: string;         // User who uploaded the document
+  title?: string;           // Display name (defaults to filename)
+  content_type?: string;    // MIME type of document
+  storage_path_supabase?: string; // Legacy path in Supabase storage
+  storage_path_s3?: string;       // Path in S3 or other storage
+  metadata?: any;           // Additional document metadata
+  status?: string;          // Processing status
 }
 
 export interface DocumentSession {
-  id: string;
-  document_id: string;
-  session_id: string;
-  created_at: string;
+  id: string;               // Primary identifier for the link
+  document_id: string;      // Document ID
+  session_id: string;       // Session ID
+  created_at: string;       // When the link was created
 }
 
-// Hook for managing conversations
+// Hook for managing conversations (sessions)
 export const useConversations = (user: User | null) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Load conversations for user
   useEffect(() => {
     if (user) {
       loadConversations();
@@ -75,7 +74,7 @@ export const useConversations = (user: User | null) => {
       const sessions = (response.data as any)?.sessions || response.data || [];
       
       // Transform sessions to match expected conversation format
-      const transformedConversations: Conversation[] = sessions
+      let transformedConversations: Conversation[] = sessions
         .filter((session: any) => session.id && session.id !== 'undefined') // Use 'id' instead of 'session_id'
         .map((session: any) => ({
           id: session.id, // Use session.id directly
@@ -85,8 +84,29 @@ export const useConversations = (user: User | null) => {
           updated_at: session.updated_at || session.created_at,
           title: session.name || 'Unnamed Session',
           last_updated: session.updated_at || session.created_at,
-          document_uuid: [] // Will be populated by separate API call if needed
+          document_uuid: [] // Will be populated by separate API call below
         }));
+      
+      // For each conversation/session, fetch associated document IDs
+      for (let i = 0; i < transformedConversations.length; i++) {
+        const conversation = transformedConversations[i];
+        try {
+          // Get documents for this session
+          const docsResponse = await sessionsApi.getSessionDocuments(conversation.id);
+          const docs = (docsResponse.data as any)?.documents || [];
+          
+          // Extract document IDs and update conversation
+          const docIds = docs.map((doc: any) => doc.id);
+          transformedConversations[i] = {
+            ...conversation,
+            document_uuid: docIds
+          };
+          console.log(`Loaded ${docIds.length} document IDs for conversation ${conversation.id}:`, docIds);
+        } catch (docErr) {
+          console.error(`Error fetching documents for session ${conversation.id}:`, docErr);
+          // Keep empty document_uuid array if there's an error
+        }
+      }
       
       setConversations(transformedConversations);
       console.log('Loaded conversations via API:', transformedConversations);
@@ -107,14 +127,34 @@ export const useConversations = (user: User | null) => {
       
       console.log('Session created via API:', data);
       
-      // Document linking will be handled by the backend when documents are uploaded
+      // Get session ID from response - session_id is used by the API response
+      const sessionId = data.session_id || '';
+      if (!sessionId) {
+        console.error('Failed to get session_id from API response:', data);
+        throw new Error('Invalid session ID in API response');
+      }
+      
+      // Link documents if provided
+      if (documentIds.length > 0) {
+        try {
+          console.log(`Linking ${documentIds.length} documents to session ${sessionId}`);
+          // For each document ID, call the API to link the document to the session
+          for (const docId of documentIds) {
+            // Note that the API expects (sessionId, documentId) order
+            await sessionsApi.linkDocumentToSession(sessionId, docId);
+          }
+        } catch (linkErr) {
+          console.error('Error linking documents to session:', linkErr);
+          // Continue even if document linking fails
+        }
+      }
       
       // Refresh conversations list
       await loadConversations();
       
       // Return data with compatibility fields
       const conversation: Conversation = {
-        id: data.session_id,
+        id: sessionId,
         name: title || 'New Chat',
         user_id: data.user_id,
         created_at: data.created_at,
@@ -133,12 +173,57 @@ export const useConversations = (user: User | null) => {
 
   const updateConversation = async (conversationId: string, updates: Partial<Conversation>) => {
     if (!user) throw new Error('User not authenticated');
+    if (!conversationId || conversationId === 'undefined') {
+      throw new Error('Invalid conversation ID');
+    }
     
     try {
-      console.log('Updating conversation (API integration needed):', conversationId, updates);
+      console.log('Updating conversation:', conversationId, updates);
       
-      // TODO: Implement proper API endpoint for updating conversations
-      // For now, just update local state and refresh
+      // Handle document linking/unlinking if document_uuid has changed
+      if (updates.document_uuid) {
+        // Get current conversation to compare documents
+        const currentConversation = conversations.find(c => c.id === conversationId);
+        
+        if (currentConversation) {
+          const currentDocIds = currentConversation.document_uuid || [];
+          const newDocIds = updates.document_uuid || [];
+          
+          // Find documents to add (in newDocIds but not in currentDocIds)
+          const docsToAdd = newDocIds.filter(id => !currentDocIds.includes(id));
+          
+          // Find documents to remove (in currentDocIds but not in newDocIds)
+          const docsToRemove = currentDocIds.filter(id => !newDocIds.includes(id));
+          
+          // Add new document links
+          for (const docId of docsToAdd) {
+            try {
+              await sessionsApi.linkDocumentToSession(conversationId, docId);
+              console.log(`Linked document ${docId} to conversation ${conversationId}`);
+            } catch (linkErr) {
+              console.error(`Error linking document ${docId}:`, linkErr);
+            }
+          }
+          
+          // Remove old document links
+          for (const docId of docsToRemove) {
+            try {
+              // Get user ID from the current user
+              const userId = user.id;
+              await sessionsApi.unlinkDocumentFromSession(conversationId, docId, userId);
+              console.log(`Unlinked document ${docId} from conversation ${conversationId}`);
+            } catch (unlinkErr) {
+              console.error(`Error unlinking document ${docId}:`, unlinkErr);
+            }
+          }
+        }
+      }
+      
+      // Name update could be implemented here if API supports it
+      if (updates.name || updates.title) {
+        // TODO: When backend supports session name updates, implement that here
+        console.log('Session name update not implemented in backend API yet');
+      }
       
       // Refresh conversations list to get latest data
       await loadConversations();
@@ -152,14 +237,18 @@ export const useConversations = (user: User | null) => {
 
   const deleteConversation = async (conversationId: string) => {
     if (!user) throw new Error('User not authenticated');
+    if (!conversationId || conversationId === 'undefined') {
+      throw new Error('Invalid conversation ID');
+    }
     
     try {
-      console.log('Deleting conversation (API integration needed):', conversationId);
+      console.log('Deleting conversation:', conversationId);
       
-      // TODO: Implement proper API endpoint for deleting conversations
-      // For now, just refresh to get latest data
+      // Use the sessions API to delete the session
+      await sessionsApi.deleteSession(conversationId);
+      console.log(`Deleted conversation ${conversationId}`);
       
-      // Refresh conversations list
+      // Refresh conversations list to get updated state
       await loadConversations();
       
       return true;
@@ -201,14 +290,23 @@ export const useChats = (conversationId: string | null) => {
     
     setIsLoading(true);
     try {
+      console.log(`Refreshing chats for conversation: ${conversationId}`);
+      
       // Use backend API to get chat history
       const response = await sessionsApi.getChatHistory(conversationId);
       const chatHistory = (response.data as any)?.chat_history || [];
+      
+      console.log(`Received ${chatHistory.length} chat messages for conversation ${conversationId}`);
       
       // Transform chat history data to match expected format
       const transformedChats: ChatMessage[] = [];
       
       chatHistory.forEach((chatLog: any, index: number) => {
+        if (!chatLog.id) {
+          console.warn('Chat message missing ID:', chatLog);
+          return; // Skip messages without IDs
+        }
+        
         // Add user message
         transformedChats.push({
           ...chatLog,
@@ -233,9 +331,10 @@ export const useChats = (conversationId: string | null) => {
         }
       });
       
+      console.log(`Transformed ${transformedChats.length} chat messages for UI`);
       setChats(transformedChats);
     } catch (err) {
-      console.error('Error loading chats:', err);
+      console.error(`Error loading chats for conversation ${conversationId}:`, err);
       setChats([]);
     } finally {
       setIsLoading(false);
@@ -332,9 +431,12 @@ export const useDocuments = (user: User | null) => {
 
   const uploadDocument = async (file: File, sessionId: string) => {
     if (!user) throw new Error('User not authenticated');
+    if (!sessionId || sessionId === 'undefined') {
+      throw new Error('Invalid session ID for document upload');
+    }
     
     try {
-      console.log('Starting document upload for file:', file.name);
+      console.log(`Starting document upload for file: ${file.name} to session: ${sessionId}`);
       
       // Use the backend API to upload the document
       console.log('Uploading document via API...');
@@ -343,7 +445,15 @@ export const useDocuments = (user: User | null) => {
       
       console.log('Document upload response:', uploadResult);
       
-      // Refresh document list
+      // Check if document was successfully uploaded and linked to session
+      if (!uploadResult.doc_id) {
+        throw new Error('No document ID returned from upload');
+      }
+      
+      // The session-document linking is handled by the backend during upload
+      // when sessionId is provided, so no need for a separate linkDocumentToSession call
+      
+      // Refresh document list to get latest data
       await refreshDocuments();
       
       // Return data with compatibility fields
@@ -356,7 +466,7 @@ export const useDocuments = (user: User | null) => {
         updated_at: new Date().toISOString(),
         user_id: user.id,
         title: uploadResult.filename,
-        content_type: file.type,
+        content_type: file.type || 'application/pdf',
         storage_path_supabase: uploadResult.filename,
         storage_path_s3: uploadResult.filename,
         status: uploadResult.status || 'processing'
