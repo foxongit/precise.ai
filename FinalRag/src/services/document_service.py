@@ -1,7 +1,7 @@
 import os
 import uuid
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from src.db.supabase_client import supabase, SUPABASE_BUCKET
 from src.core.config import settings
 
@@ -204,6 +204,44 @@ class DocumentService:
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
+    
+    def generate_signed_url(self, storage_path: str, expires_in: int = 3600) -> Optional[str]:
+        """Generate a signed URL for a document in Supabase Storage"""
+        try:
+            # Generate signed URL that expires in 1 hour (3600 seconds)
+            response = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(
+                path=storage_path,
+                expires_in=expires_in
+            )
+            
+            if hasattr(response, 'data') and response.data:
+                return response.data.get('signedUrl') or response.data.get('signedURL')
+            elif isinstance(response, dict) and 'signedUrl' in response:
+                return response['signedUrl']
+            elif isinstance(response, dict) and 'signedURL' in response:
+                return response['signedURL']
+                
+            return None
+        except Exception as e:
+            print(f"Error generating signed URL for {storage_path}: {e}")
+            return None
+    
+    def generate_public_url(self, storage_path: str) -> Optional[str]:
+        """Generate a public URL for a document (if bucket is public)"""
+        try:
+            response = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
+            
+            if hasattr(response, 'data') and response.data:
+                return response.data.get('publicUrl') or response.data.get('publicURL')
+            elif isinstance(response, dict) and 'publicUrl' in response:
+                return response['publicUrl']
+            elif isinstance(response, dict) and 'publicURL' in response:
+                return response['publicURL']
+                
+            return None
+        except Exception as e:
+            print(f"Error generating public URL for {storage_path}: {e}")
+            return None
 
 # Global instance
 document_service = DocumentService()

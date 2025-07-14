@@ -3,7 +3,7 @@ import { MessageSquare, Paperclip, Send, ChevronDown, Upload, Eye, EyeOff } from
 import type { User } from '@supabase/supabase-js'; // Keep for type definitions only
 // @ts-ignore - TypeScript can't find these modules, but they exist
 import { useConversations, useChats, useDocuments, Conversation, Document } from '../hooks/useSupabase';
-import { queryApi, healthApi, documentsApi, sessionsApi } from '../services/api';
+import { queryApi, healthApi, documentsApi, sessionsApi, documentsUrlApi } from '../services/api';
 import Sidebar from './Sidebar';
 import DocumentViewer from './DocumentViewer';
 import ActivityLog from './ActivityLog';
@@ -268,19 +268,47 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       console.log('Generating URLs for documents:', uploadedFiles.map(f => f.name));
       
       try {
-        // TODO: Use backend API to generate signed URLs for documents
-        // For now, we'll use placeholder URLs
-        console.log('Backend API endpoint for document URLs needs to be implemented');
-        
-        // Create placeholder URLs
-        const urlMap = uploadedFiles.reduce((acc, file) => {
-          // Placeholder URL pattern - in production, this would be a real signed URL from backend
-          acc[file.id] = `/api/documents/view/${file.id}`;
-          return acc;
-        }, {} as Record<string, string>);
+        // Use the new backend API to generate signed URLs
+        if (isBackendAvailable && currentConversationId) {
+          try {
+            const response = await documentsUrlApi.getAllDocumentUrls(currentConversationId);
+            const urlMap: Record<string, string> = {};
+            
+            // Map the response URLs to our document IDs
+            for (const file of uploadedFiles) {
+              const urlData = response.data.urls[file.id];
+              if (urlData && urlData.url) {
+                urlMap[file.id] = urlData.url;
+                console.log(`Generated signed URL for ${file.name}:`, urlData.url);
+              } else {
+                console.warn(`No URL generated for document ${file.id} (${file.name})`);
+                // Fallback to placeholder
+                urlMap[file.id] = `/api/documents/view/${file.id}`;
+              }
+            }
+            
+            console.log(`Generated ${Object.keys(urlMap).length} document URLs from backend`);
+            setDocumentUrls(urlMap);
+          } catch (backendError) {
+            console.warn('Backend URL generation failed, using fallback:', backendError);
+            // Fallback to placeholder URLs if backend fails
+            const urlMap = uploadedFiles.reduce((acc, file) => {
+              acc[file.id] = `/api/documents/view/${file.id}`;
+              return acc;
+            }, {} as Record<string, string>);
+            setDocumentUrls(urlMap);
+          }
+        } else {
+          // Create placeholder URLs when backend is not available
+          console.log('Backend not available, using placeholder URLs');
+          const urlMap = uploadedFiles.reduce((acc, file) => {
+            acc[file.id] = `/api/documents/view/${file.id}`;
+            return acc;
+          }, {} as Record<string, string>);
 
-        console.log(`Generated ${Object.keys(urlMap).length} placeholder document URLs`);
-        setDocumentUrls(urlMap);
+          console.log(`Generated ${Object.keys(urlMap).length} placeholder document URLs`);
+          setDocumentUrls(urlMap);
+        }
       } finally {
         setIsGeneratingUrls(false);
       }
@@ -292,7 +320,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     if (uploadedFiles.length > 0 && needsUrlGeneration && !isGeneratingUrls) {
       generateDocumentUrls();
     }
-  }, [uploadedFiles, isGeneratingUrls]); // Remove documents dependency since we're not using it
+  }, [uploadedFiles, isGeneratingUrls, isBackendAvailable, currentConversationId]); // Include backend status and session
 
   // Enhanced function to get documents with URLs using useMemo
   const documentsWithUrls = useMemo((): UploadedFile[] => {
