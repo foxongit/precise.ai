@@ -72,6 +72,10 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const [documentActivitySplit, setDocumentActivitySplit] = useState(60);
   const [isResizingActivityLog, setIsResizingActivityLog] = useState(false);
   
+  // Chat state management
+  const [chatMessages, setChatMessages] = useState<Record<string, Message[]>>({});
+  const [isSwitchingChat, setIsSwitchingChat] = useState(false);
+  
   // Document URL state
   const [documentUrls, setDocumentUrls] = useState<Record<string, string>>({});
   const [isGeneratingUrls, setIsGeneratingUrls] = useState(false);
@@ -82,15 +86,62 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const splitRef = useRef<HTMLDivElement>(null);
   
   // Convert Supabase data to UI format for compatibility with existing components
-  const chats: Chat[] = conversations
-    .filter(conv => conv.id && conv.id !== 'undefined') // Filter out invalid conversations
-    .map(conv => ({
-      id: conv.id,
-      title: conv.title || conv.name || 'Untitled Chat',
-      messages: supabaseChats
-        .filter(chat => chat.conversation_id === conv.id)
+  // Use a stable structure to prevent unnecessary re-renders
+  const chats: Chat[] = useMemo(() => {
+    const result = conversations
+      .filter(conv => conv.id && conv.id !== 'undefined') // Filter out invalid conversations
+      .map(conv => {
+        const conversationId = conv.id;
+        
+        // Get messages for this conversation, use cached version if available
+        const conversationMessages = chatMessages[conversationId] || 
+          supabaseChats
+            .filter(chat => chat.conversation_id === conversationId)
+            .sort((a, b) => {
+              // Primary sort by step, fallback to timestamp for reliability
+              if ((a.step || 0) !== (b.step || 0)) {
+                return (a.step || 0) - (b.step || 0);
+              }
+              return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+            })
+            .map(chat => ({
+              id: chat.id,
+              content: chat.content || '',
+              sender: chat.role === 'user' ? 'user' : 'ai' as const,
+              timestamp: new Date(chat.created_at)
+            }));
+
+        return {
+          id: conversationId,
+          title: conv.title || conv.name || 'Untitled Chat',
+          messages: conversationMessages,
+          lastMessage: new Date(conv.last_updated || conv.updated_at || conv.created_at),
+          document_uuid: conv.document_uuid || []
+        };
+      });
+    
+    return result;
+  }, [conversations, supabaseChats, chatMessages]);
+
+  // Update message cache when supabaseChats changes
+  useEffect(() => {
+    const newChatMessages = { ...chatMessages };
+    
+    // Group messages by conversation
+    const messagesByConversation: Record<string, Message[]> = {};
+    
+    supabaseChats.forEach(chat => {
+      const conversationId = chat.conversation_id || '';
+      if (conversationId && !messagesByConversation[conversationId]) {
+        messagesByConversation[conversationId] = [];
+      }
+    });
+    
+    // Convert supabaseChats to UI format and group by conversation
+    Object.keys(messagesByConversation).forEach(conversationId => {
+      const conversationChats = supabaseChats
+        .filter(chat => chat.conversation_id === conversationId)
         .sort((a, b) => {
-          // Primary sort by step, fallback to timestamp for reliability
           if ((a.step || 0) !== (b.step || 0)) {
             return (a.step || 0) - (b.step || 0);
           }
@@ -99,14 +150,59 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         .map(chat => ({
           id: chat.id,
           content: chat.content || '',
-          sender: chat.role === 'user' ? 'user' : 'ai' as const,
+          sender: chat.role === 'user' ? 'user' : 'ai',
           timestamp: new Date(chat.created_at)
-        })),
-      lastMessage: new Date(conv.last_updated || conv.updated_at || conv.created_at),
-      document_uuid: conv.document_uuid || []
-    }));
+        }) as Message);
+      
+      newChatMessages[conversationId] = conversationChats;
+    });
+    
+    setChatMessages(newChatMessages);
+    
+    // If we have data for the current conversation, stop the switching animation
+    if (currentConversationId && newChatMessages[currentConversationId]) {
+      setIsSwitchingChat(false);
+    }
+  }, [supabaseChats, currentConversationId]);
 
-  const currentChat = chats.find(chat => chat.id === currentConversationId) || null;
+  const currentChat = useMemo(() => {
+    if (!currentConversationId) return null;
+    
+    // Find the chat in the chats array
+    const foundChat = chats.find(chat => chat.id === currentConversationId);
+    
+    // If we're switching and haven't found the chat yet, return a stable placeholder
+    if (isSwitchingChat && !foundChat) {
+      // Return a placeholder chat with empty messages to prevent welcome screen flickering
+      return {
+        id: currentConversationId,
+        title: 'Loading...',
+        messages: [],
+        lastMessage: new Date(),
+        document_uuid: []
+      };
+    }
+    
+    return foundChat || null;
+  }, [chats, currentConversationId, isSwitchingChat]);
+
+  // Determine if we should show the welcome screen
+  const shouldShowWelcomeScreen = useMemo(() => {
+    // Show welcome screen if:
+    // 1. No conversation is selected
+    if (!currentConversationId) return true;
+    
+    // 2. We're still switching chats (don't show welcome screen while switching)
+    if (isSwitchingChat) return false;
+    
+    // 3. Chat exists but has no messages (and we're not in a loading state)
+    if (currentChat && currentChat.messages.length === 0 && !isLoading) {
+      return true;
+    }
+    
+    // 4. No chat found (but we're not switching) - this shouldn't happen often
+    return !currentChat && !isSwitchingChat;
+  }, [currentConversationId, currentChat, isLoading, isSwitchingChat]);
 
   // Convert documents to UploadedFile format for compatibility using useMemo
   const uploadedFiles: UploadedFile[] = useMemo(() => {
@@ -377,6 +473,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 
   const startNewChatSession = () => {
     // Simply start a new chat session without processing any input
+    setIsSwitchingChat(false); // Clear loading state
     setCurrentConversationId(null);
     setInputValue(''); // Clear any existing input
     setSelectedDocument(null);
@@ -512,6 +609,13 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       }
     }
     
+    // Don't switch if we're already on this chat
+    if (currentConversationId === chat.id) {
+      return;
+    }
+    
+    // Set loading state immediately when switching
+    setIsSwitchingChat(true);
     setCurrentConversationId(chat.id);
   };
 
@@ -586,12 +690,25 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   // Force refresh chats when conversation ID changes to ensure UI sync
   useEffect(() => {
     if (currentConversationId) {
+      // Set loading state immediately when switching conversations
+      setIsSwitchingChat(true);
+      
       // Small delay to ensure any pending database operations are complete
-      const timeoutId = setTimeout(() => {
-        refreshChats();
+      const timeoutId = setTimeout(async () => {
+        try {
+          await refreshChats();
+        } catch (error) {
+          console.error('Error refreshing chats:', error);
+        } finally {
+          setIsSwitchingChat(false);
+        }
       }, 100);
       
-      return () => clearTimeout(timeoutId);
+      return () => {
+        clearTimeout(timeoutId);
+      };
+    } else {
+      setIsSwitchingChat(false);
     }
   }, [currentConversationId, refreshChats]);
 
@@ -1051,7 +1168,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         {/* Header */}
        <div className={`p-4 bg-white flex-shrink-0 flex items-center justify-between transition-all duration-200 ${isScrolled ? 'border-b border-gray-200 shadow-sm' : '' }`}>
           <div className="flex items-center space-x-3">
-            <h2 className="text-4xl top-0 font-Poppins font-semibold  bg-gradient-to-l from-purple-500  to-black  bg-clip-text text-transparent">AI Assistant</h2>
+            <h2 className="text-4xl top-0 font-Poppins font-semibold  bg-gradient-to-l from-purple-500  to-black  bg-clip-text text-transparent">Precise.ai</h2>
           </div>
         </div>
 
@@ -1073,7 +1190,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             <div className="h-screen flex flex-col bg-white">
               {/* Messages Area or Welcome Screen */}
               <div className="messages-container flex-1 overflow-y-auto p-4">
-                {!currentChat || currentChat?.messages?.length === 0 ? (
+                {shouldShowWelcomeScreen ? (
                   <div className="h-full flex flex-col items-center justify-center space-y-6 max-w-xl mx-auto">
                     <div className="text-center space-y-3">
                       <div className="w-8 h-8 bg-gray-800 rounded-xl flex items-center justify-center mx-auto mb-4">
@@ -1124,9 +1241,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                       </div>
                     )}
                   </div>
-                ) : (
+                ) : currentChat && currentChat.messages ? (
                   <div className="space-y-4">
-
                     {currentChat.messages.map((message, index) => (
                       <div
                         key={`${message.id}-${index}-${currentConversationId}`} // Enhanced key for better re-rendering
@@ -1167,6 +1283,17 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                     )}
                 
                     <div ref={messagesEndRef} />
+                  </div>
+                ) : (
+                  <div className="h-full flex items-center justify-center">
+                    <div className="flex items-center space-x-2">
+                      <div className="w-4 h-4 bg-gray-400 rounded-full animate-bounce"></div>
+                      <div className="w-4 h-4 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                      <div className="w-4 h-4 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                      <span className="text-gray-500">
+                        {isSwitchingChat ? 'Loading messages...' : 'Loading chat...'}
+                      </span>
+                    </div>
                   </div>
                 )}
 
