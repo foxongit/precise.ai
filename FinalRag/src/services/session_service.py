@@ -89,6 +89,10 @@ class SessionService:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
+    def save_ai_response(self, session_id: str, response: str) -> Dict[str, Any]:
+        """Save only AI response to chat log (when user prompt is already saved)"""
+        return self.save_chat_log(session_id, "", response)
+    
     def link_document_to_session(self, document_id: str, session_id: str) -> Dict[str, Any]:
         """Link a document to a session via document_sessions table"""
         try:
@@ -169,6 +173,33 @@ class SessionService:
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
-
+    
+    def delete_session(self, session_id: str, user_id: str) -> Dict[str, Any]:
+        """Delete a session and all its associated data"""
+        try:
+            # First verify the session belongs to the user
+            if not self.verify_session(session_id, user_id):
+                return {"success": False, "error": "Session not found or doesn't belong to user"}
+            
+            # Delete all document-session links for this session
+            doc_sessions_response = supabase.table('document_sessions').delete().eq('session_id', session_id).execute()
+            
+            # Delete all chat logs for this session
+            chat_logs_response = supabase.table('chat_logs').delete().eq('session_id', session_id).execute()
+            
+            # Finally delete the session itself
+            session_response = supabase.table('sessions').delete().eq('id', session_id).eq('user_id', user_id).execute()
+            
+            if session_response.data is not None:  # None means successful deletion
+                return {
+                    "success": True,
+                    "message": "Session deleted successfully",
+                    "session_id": session_id
+                }
+            else:
+                return {"success": False, "error": "Failed to delete session"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
 # Global instance
 session_service = SessionService()

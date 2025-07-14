@@ -307,19 +307,41 @@ export const useChats = (conversationId: string | null) => {
           return; // Skip messages without IDs
         }
         
-        // Add user message
-        transformedChats.push({
-          ...chatLog,
-          id: `${chatLog.id}-user`,
-          conversation_id: chatLog.session_id,
-          role: 'user',
-          content: chatLog.prompt,
-          step: (index * 2) + 1
-        });
+        // Check if this is a user message (has prompt but no response)
+        if (chatLog.prompt && chatLog.prompt.trim() && (!chatLog.response || !chatLog.response.trim())) {
+          transformedChats.push({
+            ...chatLog,
+            id: `${chatLog.id}-user`,
+            conversation_id: chatLog.session_id,
+            role: 'user',
+            content: chatLog.prompt,
+            step: index + 1
+          });
+        }
         
-        // Only add assistant message if response is not empty
-        // This allows us to show user messages immediately while AI generates response
-        if (chatLog.response && chatLog.response.trim()) {
+        // Check if this is an AI response (has response but no prompt)
+        if (chatLog.response && chatLog.response.trim() && (!chatLog.prompt || !chatLog.prompt.trim())) {
+          transformedChats.push({
+            ...chatLog,
+            id: `${chatLog.id}-assistant`,
+            conversation_id: chatLog.session_id,
+            role: 'assistant',
+            content: chatLog.response,
+            step: index + 1
+          });
+        }
+        
+        // Legacy support: if both prompt and response exist in the same row (old format)
+        if (chatLog.prompt && chatLog.prompt.trim() && chatLog.response && chatLog.response.trim()) {
+          transformedChats.push({
+            ...chatLog,
+            id: `${chatLog.id}-user`,
+            conversation_id: chatLog.session_id,
+            role: 'user',
+            content: chatLog.prompt,
+            step: (index * 2) + 1
+          });
+          
           transformedChats.push({
             ...chatLog,
             id: `${chatLog.id}-assistant`,
