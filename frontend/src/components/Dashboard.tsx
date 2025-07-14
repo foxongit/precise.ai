@@ -485,6 +485,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       }
     }
     
+    // Close any open document when switching chats
+    setSelectedDocument(null);
     setCurrentConversationId(chat.id);
   };
 
@@ -1358,6 +1360,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                 >
                   <ActivityLog 
                     currentSessionId={currentConversationId}
+                    onClose={() => setShowActivityLog(false)}
                   />
                 </div>
               )}
@@ -1374,6 +1377,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             >
               <ActivityLog 
                 currentSessionId={currentConversationId}
+                onClose={() => setShowActivityLog(false)}
               />
             </div>
           )}
