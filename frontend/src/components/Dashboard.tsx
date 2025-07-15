@@ -79,6 +79,15 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   // Document URL state
   const [documentUrls, setDocumentUrls] = useState<Record<string, string>>({});
   const [isGeneratingUrls, setIsGeneratingUrls] = useState(false);
+  
+  // Process tracking state
+  const [processSteps, setProcessSteps] = useState<Array<{
+    step: string;
+    status: 'pending' | 'in-progress' | 'completed' | 'error';
+    message: string;
+    timestamp: Date;
+  }>>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -866,6 +875,32 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     try {
       const userMessage = inputValue;
       
+      // Initialize process tracking and show activity log
+      setProcessSteps([]); // Clear previous process steps
+      setIsProcessing(true);
+      setShowActivityLog(true);
+      
+      // Add initial step
+      const addProcessStep = (step: string, status: 'pending' | 'in-progress' | 'completed' | 'error', message: string) => {
+        setProcessSteps(prev => {
+          const existingIndex = prev.findIndex(s => s.step === step);
+          const newStep = { step, status, message, timestamp: new Date() };
+          
+          if (existingIndex >= 0) {
+            // Update existing step
+            const updated = [...prev];
+            updated[existingIndex] = newStep;
+            return updated;
+          } else {
+            // Add new step
+            return [...prev, newStep];
+          }
+        });
+      };
+      
+      // Step 1: Initialize query
+      addProcessStep('query', 'in-progress', 'Processing user query...');
+      
       // Check if this is the first message in the conversation and update title if needed
       const currentConv = conversations.find((conv: Conversation) => conv.id === conversationId);
       const currentChatMessages = currentChat?.messages || [];
@@ -907,6 +942,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         }
       }
 
+      // Complete query step
+      addProcessStep('query', 'completed', 'Query initialized successfully');
+
       // Clear input and set loading state
       setInputValue('');
       setIsLoading(true);
@@ -923,7 +961,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       console.log('Document UUID from conversation:', currentConv?.document_uuid);
       console.log('Selected documents for analysis:', selectedDocumentsForAnalysis);
       console.log('All selected doc IDs:', selectedDocIds);
-      console.log('Available documents:', uploadedFiles.map(f => ({ id: f.id, name: f.name })));          // Use selected document IDs as they are
+      console.log('Available documents:', uploadedFiles.map(f => ({ id: f.id, name: f.name })));
 
       try {
         // First, save the user message to chat log
@@ -935,6 +973,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           console.log('Using RAG query API with documents:', selectedDocIds);
           console.log('User message:', userMessage);
           console.log('Conversation ID:', conversationId);
+          
+          // Step 2: Query enrichment
+          addProcessStep('enrich', 'in-progress', 'Enriching query with context...');
           
           // Create a request payload matching the structure expected by the backend
           const queryRequest = {
@@ -952,30 +993,49 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           });
           
           try {
+            // Step 3: Document retrieval
+            addProcessStep('enrich', 'completed', 'Query enriched successfully');
+            addProcessStep('retrieve', 'in-progress', `Retrieving relevant content from ${selectedDocIds.length} documents...`);
+            
             const queryResponse = await queryApi.submitQuery(queryRequest);
             console.log('RAG API response:', queryResponse);
             console.log('Response data:', queryResponse?.data);
             
+            // Step 4: PII masking
+            addProcessStep('retrieve', 'completed', 'Document retrieval completed');
+            addProcessStep('mask', 'in-progress', 'Applying privacy protection...');
+            
+            // Step 5: Response generation
+            addProcessStep('mask', 'completed', 'Privacy protection applied');
+            addProcessStep('response', 'in-progress', 'Generating AI response...');
+            
             if (queryResponse && queryResponse.data && queryResponse.data.response) {
               console.log('AI response extracted:', queryResponse.data.response);
+              addProcessStep('response', 'completed', 'AI response generated successfully');
             } else {
               console.error('Invalid response structure:', queryResponse);
+              addProcessStep('response', 'error', 'Failed to generate AI response');
               // Save a default response if AI doesn't respond
               await sessionsApi.saveAIResponse(conversationId, "I'm having trouble processing your request right now. Please try again.");
             }
           } catch (apiError) {
             console.error('API call failed:', apiError);
+            addProcessStep('response', 'error', 'API call failed');
             // Save an error response if the API fails
             await sessionsApi.saveAIResponse(conversationId, "I'm sorry, I encountered an error while processing your request. Please try again.");
           }
         } else {
           // Fallback response when no documents are selected or backend unavailable
+          addProcessStep('response', 'in-progress', 'Generating fallback response...');
+          
           if (selectedDocIds.length === 0) {
             console.log("No documents selected, saving general response");
             await sessionsApi.saveAIResponse(conversationId, "I'd be happy to help! Please upload some documents so I can provide more specific assistance, or ask me a general question.");
+            addProcessStep('response', 'completed', 'General response provided');
           } else {
             console.log("Backend unavailable, saving error response");
             await sessionsApi.saveAIResponse(conversationId, "I'm currently unable to process your request. Please check your connection and try again.");
+            addProcessStep('response', 'error', 'Backend unavailable');
           }
         }
         
@@ -985,10 +1045,21 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         // Refresh the chat messages to display both prompt and response
         await refreshChats();
         setIsLoading(false);
+        setIsProcessing(false);
+        
+        // Keep activity log open so users can see the completed process
+        // Auto-hide activity log after 10 seconds but keep process history
+        setTimeout(() => {
+          setShowActivityLog(false);
+          // Don't clear process steps here - let ActivityLog component handle history
+        }, 10000);
         
       } catch (error) {
         console.error('Error processing message:', error);
         setIsLoading(false);
+        setIsProcessing(false);
+        
+        addProcessStep('response', 'error', 'Processing failed: ' + (error as Error).message);
         
         // Save error message to user
         try {
@@ -1002,6 +1073,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     } catch (error) {
       console.error('Failed to send message:', error);
       setIsLoading(false);
+      setIsProcessing(false);
       
       // Show friendly error to user
       alert('Failed to send message. Please check your connection and try again.');
@@ -1047,6 +1119,30 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     }
 
     setIsUploading(true);
+    
+    // Initialize upload tracking and show activity log
+    setProcessSteps([]); // Clear previous process steps
+    setIsProcessing(true);
+    setShowActivityLog(true);
+    
+    // Helper function to add upload process steps
+    const addUploadStep = (step: string, status: 'pending' | 'in-progress' | 'completed' | 'error', message: string) => {
+      setProcessSteps(prev => {
+        const existingIndex = prev.findIndex(s => s.step === step);
+        const newStep = { step, status, message, timestamp: new Date() };
+        
+        if (existingIndex >= 0) {
+          // Update existing step
+          const updated = [...prev];
+          updated[existingIndex] = newStep;
+          return updated;
+        } else {
+          // Add new step
+          return [...prev, newStep];
+        }
+      });
+    };      // Step 1: Initialize upload
+      addUploadStep('upload', 'in-progress', `Preparing to upload ${validFiles.length} file(s)...`);
 
     try {
       // Array to collect document IDs
@@ -1057,6 +1153,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       
       // If no current conversation, create one
       if (!sessionIdToUse) {
+        addUploadStep('session', 'in-progress', 'Creating session for document upload...');
         console.log('No current conversation, creating one for document upload');
         
         // Check if there are any existing conversations first that we can reuse
@@ -1081,13 +1178,17 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           sessionIdToUse = conversationToUse.id;
           setCurrentConversationId(sessionIdToUse);
           console.log('Reusing existing empty conversation:', sessionIdToUse);
+          addUploadStep('session', 'completed', 'Reusing existing session');
         } else {
           // Create a new conversation only if no empty ones exist
           const newConversation = await createConversation('Document Upload', []);
           sessionIdToUse = newConversation.id;
           setCurrentConversationId(sessionIdToUse);
           console.log('Created new conversation with ID:', sessionIdToUse);
+          addUploadStep('session', 'completed', 'Created new session');
         }
+      } else {
+        addUploadStep('session', 'completed', 'Using current session');
       }
       
       // At this point we should have a valid session ID
@@ -1095,8 +1196,12 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         throw new Error('Failed to create or get a valid session ID');
       }
       
+      // Step 2: Upload files
+      addUploadStep('upload', 'in-progress', `Uploading ${validFiles.length} file(s)...`);
+      
       // Upload all files using the API (RAG backend)
       for (const file of validFiles) {
+        addUploadStep('upload', 'in-progress', `Uploading ${file.name}...`);
         console.log(`Uploading file ${file.name} to session ${sessionIdToUse} via API`);
         try {
           // Now sessionIdToUse is guaranteed to be string
@@ -1106,13 +1211,21 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           if (uploadData && uploadData.doc_id) {
             console.log(`File ${file.name} uploaded successfully, doc_id: ${uploadData.doc_id}`);
             uploadedDocumentIds.push(uploadData.doc_id);
+            addUploadStep('upload', 'in-progress', `✓ ${file.name} uploaded successfully`);
           } else {
             console.error('Upload response missing doc_id:', response);
+            addUploadStep('upload', 'error', `✗ ${file.name} upload failed - no doc_id`);
           }
         } catch (uploadError) {
           console.error(`Error uploading file ${file.name}:`, uploadError);
+          addUploadStep('upload', 'error', `✗ ${file.name} upload failed`);
           // Continue with other files
         }
+      }
+      
+      // Step 3: Process documents
+      if (uploadedDocumentIds.length > 0) {
+        addUploadStep('document', 'in-progress', 'Processing uploaded documents...');
       }
       
       // Refresh documents to get the latest data
@@ -1136,6 +1249,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         const uploadMessage = generateUploadMessage(validFiles);
         setInputValue(prev => prev + (prev ? '\n\n' : '') + uploadMessage);
         
+        addUploadStep('document', 'completed', `${uploadedDocumentIds.length} document(s) processed successfully`);
+        
       } else if (uploadedDocumentIds.length > 0) {
         // No current conversation - automatically create a new chat with the uploaded documents
         const chatTitle = validFiles.length === 1 
@@ -1153,6 +1268,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         // Set conversation ID
         setCurrentConversationId(newConversationId);
         
+        addUploadStep('document', 'completed', `Auto-created chat: ${chatTitle}`);
+        
         // Prepare welcome message for the documents
         const uploadMessage = generateUploadMessage(validFiles);
         setInputValue(uploadMessage);
@@ -1165,8 +1282,20 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         console.log('Auto-created chat refresh completed');
       }
       
+      // Mark upload as complete
+      addUploadStep('upload', 'completed', `Upload completed: ${uploadedDocumentIds.length} of ${validFiles.length} files successful`);
+      setIsProcessing(false);
+      
+      // Auto-hide activity log after 8 seconds for uploads but keep history
+      setTimeout(() => {
+        setShowActivityLog(false);
+        // Don't clear process steps here - let ActivityLog component handle history
+      }, 8000);
+      
     } catch (error) {
       console.error('Error uploading files:', error);
+      addUploadStep('upload', 'error', `Upload failed: ${(error as Error).message}`);
+      setIsProcessing(false);
       alert('Error uploading files. Please try again.');
     } finally {
       setIsUploading(false);
@@ -1489,6 +1618,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                 >
                   <ActivityLog 
                     currentSessionId={currentConversationId}
+                    sessions={conversations}
+                    currentProcess={processSteps}
+                    isProcessing={isProcessing}
                   />
                 </div>
               )}
@@ -1505,6 +1637,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             >
               <ActivityLog 
                 currentSessionId={currentConversationId}
+                sessions={conversations}
+                currentProcess={processSteps}
+                isProcessing={isProcessing}
               />
             </div>
           )}
