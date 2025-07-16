@@ -29,9 +29,10 @@ interface ActivityLogProps {
   sessions?: Session[];
   currentProcess?: ProcessStep[];
   isProcessing?: boolean;
+  onClose?: () => void;
 }
 
-export default function ActivityLog({ currentSessionId, sessions = [], currentProcess = [], isProcessing = false }: ActivityLogProps) {
+export default function ActivityLog({ currentSessionId, sessions = [], currentProcess = [], isProcessing = false, onClose }: ActivityLogProps) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [processHistory, setProcessHistory] = useState<ProcessStep[]>([]);
@@ -163,11 +164,22 @@ export default function ActivityLog({ currentSessionId, sessions = [], currentPr
     <div className="h-full bg-white flex flex-col">
       <div className="p-3 border-b border-gray-200 flex items-center justify-between">
         <h3 className="font-semibold text-gray-800">Activity Log</h3>
-        {currentSessionId && (
-          <span className="text-xs bg-purple-100 text-purple-800 py-1 px-2 rounded-full">
-            Filtered by current session
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {currentSessionId && (
+            <span className="text-xs bg-purple-100 text-purple-800 py-1 px-2 rounded-full">
+              Filtered by current session
+            </span>
+          )}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-1 hover:bg-gray-100 rounded-md transition-colors"
+              title="Close activity log"
+            >
+              <X className="w-4 h-4 text-gray-500 hover:text-gray-700" />
+            </button>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-auto p-3">
         {isLoading ? (

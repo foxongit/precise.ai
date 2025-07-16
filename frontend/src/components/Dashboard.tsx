@@ -404,7 +404,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       
       e.preventDefault();
       const containerRect = splitRef.current.getBoundingClientRect();
-      const newPosition = ((e.clientX - containerRect.left) / containerRect.width) * 100;
+      // Use the element's clientWidth to exclude scrollbar width
+      const containerWidth = splitRef.current.clientWidth;
+      const newPosition = ((e.clientX - containerRect.left) / containerWidth) * 100;
       
       // VS Code-like smooth constraints
       const clampedPosition = Math.max(15, Math.min(85, newPosition));
@@ -1340,7 +1342,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         <div className="flex-1 flex overflow-hidden">
           {/* Chat Area */}
           <div 
-            className={`flex flex-col bg-white min-w-0 transition-all duration-75 ease-out ${
+            className={`chat-area-container flex flex-col bg-white min-w-0 transition-all duration-75 ease-out ${
               isResizing || isResizingActivityLog ? 'transition-none' : ''
             }`}
             style={{ 
@@ -1351,9 +1353,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                   : '100%' 
             }}
           >
-            <div className="h-screen flex flex-col bg-white">
+            <div className="h-full flex flex-col bg-white">
               {/* Messages Area or Welcome Screen */}
-              <div className="messages-container flex-1 overflow-y-auto p-4">
+              <div className="messages-container flex-1 overflow-y-auto p-4 scrollbar-gutter-stable">
                 {shouldShowWelcomeScreen ? (
                   <div className="h-full flex flex-col items-center justify-center space-y-6 max-w-xl mx-auto">
                     <div className="text-center space-y-3">
@@ -1572,7 +1574,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           {selectedDocument && (
             <div 
               style={{ width: `${100 - splitPosition}%` }} 
-              className={`min-w-0 flex flex-col transition-all duration-75 ease-out ${
+              className={`min-w-0 flex flex-col transition-all duration-75 ease-out overflow-hidden ${
                 isResizing || isResizingActivityLog ? 'transition-none' : ''
               }`}
             >
@@ -1621,6 +1623,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                     sessions={conversations}
                     currentProcess={processSteps}
                     isProcessing={isProcessing}
+                    onClose={() => setShowActivityLog(false)}
                   />
                 </div>
               )}
@@ -1640,6 +1643,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                 sessions={conversations}
                 currentProcess={processSteps}
                 isProcessing={isProcessing}
+                onClose={() => setShowActivityLog(false)}
               />
             </div>
           )}
