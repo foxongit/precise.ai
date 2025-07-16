@@ -26,7 +26,11 @@ class Settings:
     SUPABASE_KEY = os.getenv("SUPABASE_KEY")
     SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "documents")
    
-    # Gemini API Settings
+    # OpenAI API Settings
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # or "gpt-4o", "gpt-3.5-turbo"
+    
+    # Legacy Gemini settings (keep for backward compatibility)
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-pro")
    
@@ -38,10 +42,10 @@ class Settings:
         """Validate required environment variables and create directories"""
         if not cls.SUPABASE_URL or not cls.SUPABASE_KEY:
             raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
-       
-        if not cls.GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY must be set in environment variables")
-       
+        
+        if not cls.OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY must be set in environment variables")
+        
         # Ensure all data directories exist
         os.makedirs(cls.UPLOAD_DIR, exist_ok=True)
         os.makedirs(cls.CHROMA_DB_DIR, exist_ok=True)
