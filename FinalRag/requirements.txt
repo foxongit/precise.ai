@@ -5,6 +5,7 @@ langchain
 langchain-community
 langchain-huggingface
 langchain-ollama
+langchain-openai
 chromadb
 spacy
 python-dotenv
@@ -13,5 +14,4 @@ supabase
 pdfplumber
 langchain_chroma
 sentence-transformers
-langchain-google-genai
-google-generativeai
+openai
