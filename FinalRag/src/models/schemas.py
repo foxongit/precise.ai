@@ -5,7 +5,7 @@ class QueryRequest(BaseModel):
     query: str
     user_id: str
     session_id: str
-    doc_ids: List[str]
+    doc_ids: List[str] = []  # Make this optional with default empty list
     k: Optional[int] = 4
 
 class CreateSessionRequest(BaseModel):

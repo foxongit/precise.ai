@@ -203,20 +203,27 @@ export const sessionsApi = {
     return response_data;
   },
 
-  // Save only user prompt
+  // Save only user prompt and return chat log ID
   saveUserMessage: async (sessionId: string, prompt: string): Promise<any> => {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');
     
-    const response = await api.post(`/sessions/${sessionId}/chat-log`, {
+    const response = await api.post(`/sessions/${sessionId}/user-message`, {
       user_id: userId,
-      prompt,
-      response: ""
+      prompt
     });
     return response;
   },
 
-  // Save only AI response
+  // Update existing chat log with AI response
+  updateChatLogResponse: async (chatLogId: string, response: string): Promise<any> => {
+    const response_data = await api.put(`/sessions/chat-log/${chatLogId}/response`, {
+      response
+    });
+    return response_data;
+  },
+
+  // Save only AI response (for backwards compatibility)
   saveAIResponse: async (sessionId: string, response: string): Promise<any> => {
     const userId = await getUserId();
     if (!userId) throw new Error('User not authenticated');

@@ -45,8 +45,14 @@ class SessionService:
     def verify_session(self, session_id: str, user_id: str) -> bool:
         """Verify that a session exists and belongs to the user"""
         try:
+            if not session_id or not user_id:
+                print(f"Invalid session verification input: session_id={session_id}, user_id={user_id}")
+                return False
+                
             session_check = supabase.table('sessions').select("*").eq('id', session_id).eq('user_id', user_id).execute()
-            return bool(session_check.data)
+            result = bool(session_check.data)
+            print(f"Session verification for {session_id} and user {user_id}: {result}")
+            return result
         except Exception as e:
             print(f"Error verifying session: {e}")
             return False
@@ -86,6 +92,40 @@ class SessionService:
                 return {"success": True, "chat_log_id": chat_log_data["id"]}
             else:
                 return {"success": False, "error": "Failed to save chat log"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def save_user_message(self, session_id: str, prompt: str) -> Dict[str, Any]:
+        """Save user message and return chat log ID for later response update"""
+        try:
+            chat_log_data = {
+                "id": str(uuid.uuid4()),
+                "session_id": session_id,
+                "prompt": prompt,
+                "response": "",
+                "created_at": datetime.now().isoformat()
+            }
+            
+            chat_response = supabase.table('chat_logs').insert(chat_log_data).execute()
+            
+            if chat_response.data:
+                return {"success": True, "chat_log_id": chat_log_data["id"]}
+            else:
+                return {"success": False, "error": "Failed to save user message"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def update_chat_log_response(self, chat_log_id: str, response: str) -> Dict[str, Any]:
+        """Update existing chat log with AI response"""
+        try:
+            update_response = supabase.table('chat_logs').update({
+                "response": response
+            }).eq('id', chat_log_id).execute()
+            
+            if update_response.data:
+                return {"success": True, "chat_log_id": chat_log_id}
+            else:
+                return {"success": False, "error": "Failed to update chat log with response"}
         except Exception as e:
             return {"success": False, "error": str(e)}
     

@@ -124,6 +124,53 @@ async def save_chat_log(session_id: str, request: dict):
     else:
         raise HTTPException(status_code=500, detail=result["error"])
 
+@router.post("/{session_id}/user-message")
+async def save_user_message(session_id: str, request: dict):
+    """Save a user message and return chat log ID for later response update"""
+    
+    user_id = request.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    # Verify session belongs to user
+    if not session_service.verify_session(session_id, user_id):
+        raise HTTPException(status_code=404, detail="Session not found or doesn't belong to user")
+    
+    prompt = request.get("prompt", "")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt is required")
+    
+    result = session_service.save_user_message(session_id, prompt)
+    
+    if result["success"]:
+        return {
+            "success": True,
+            "chat_log_id": result["chat_log_id"],
+            "session_id": session_id,
+            "message": "User message saved successfully"
+        }
+    else:
+        raise HTTPException(status_code=500, detail=result["error"])
+
+@router.put("/chat-log/{chat_log_id}/response")
+async def update_chat_log_response(chat_log_id: str, request: dict):
+    """Update existing chat log with AI response"""
+    
+    response = request.get("response", "")
+    if not response:
+        raise HTTPException(status_code=400, detail="Response is required")
+    
+    result = session_service.update_chat_log_response(chat_log_id, response)
+    
+    if result["success"]:
+        return {
+            "success": True,
+            "chat_log_id": chat_log_id,
+            "message": "Chat log updated with response successfully"
+        }
+    else:
+        raise HTTPException(status_code=500, detail=result["error"])
+
 @router.delete("/{session_id}")
 async def delete_session(session_id: str, user_id: str):
     """Delete a session"""

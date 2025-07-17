@@ -83,6 +83,9 @@ def process_document_background_test(file_path: str, user_id: str, doc_id: str, 
         
         print(f"Processing document: {filename}")
         
+        # Link document to session IMMEDIATELY after starting processing
+        session_service.link_document_to_session(doc_id, session_id)
+        
         # Add to RAG system directly
         result = rag_pipeline.add_document(
             pdf_path=file_path,
@@ -220,7 +223,11 @@ async def upload_document_test(
         # Initialize status
         document_service.update_document_status(doc_id, "processing", "Document uploaded, processing started...")
         
-        # Add background task for processing (without Supabase Storage)
+        # IMMEDIATELY link document to session before processing
+        link_result = session_service.link_document_to_session(doc_id, session_id)
+        print(f"Document link result: {link_result}")
+        
+        # Add background task for processing
         background_tasks.add_task(
             process_document_background_test,
             file_path=file_path,
@@ -235,12 +242,13 @@ async def upload_document_test(
         return JSONResponse(
             status_code=202,  # 202 Accepted - processing in background
             content={
-                "message": "Document uploaded successfully and is being processed (test mode)",
+                "message": "Document uploaded successfully and is being processed",
                 "doc_id": doc_id,
                 "session_id": session_id,
                 "filename": file.filename,
                 "status": "processing",
-                "status_check_url": f"/documents/{user_id}/{doc_id}/status"
+                "status_check_url": f"/documents/{user_id}/{doc_id}/status",
+                "linked_to_session": link_result.get("success", False)
             }
         )
             

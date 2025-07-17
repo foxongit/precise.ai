@@ -874,6 +874,13 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       return;
     }
 
+    // Validate user authentication
+    if (!user?.id) {
+      console.error('User not authenticated');
+      alert('Please log in to send messages');
+      return;
+    }
+
     try {
       const userMessage = inputValue;
       
@@ -951,24 +958,24 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       setInputValue('');
       setIsLoading(true);
 
-      // Get all documents selected for this conversation
-      const chatData = conversations.find((conv: Conversation) => conv.id === conversationId);
-      // Deduplicate document IDs using Set to avoid duplicates
-      const selectedDocIds = [...new Set([
-        ...(chatData?.document_uuid || []),
-        ...selectedDocumentsForAnalysis
-      ])];
+      // Use ONLY the checked documents for analysis - not all conversation documents
+      // This ensures users can control exactly which documents are used for each query
+      const selectedDocIds = [...new Set(selectedDocumentsForAnalysis)];
 
       console.log('Current conversation:', currentConv);
-      console.log('Document UUID from conversation:', currentConv?.document_uuid);
-      console.log('Selected documents for analysis:', selectedDocumentsForAnalysis);
-      console.log('All selected doc IDs:', selectedDocIds);
+      console.log('Selected documents for analysis (checked boxes):', selectedDocumentsForAnalysis);
+      console.log('Document IDs being sent to query:', selectedDocIds);
       console.log('Available documents:', uploadedFiles.map(f => ({ id: f.id, name: f.name })));
 
       try {
         // First, save the user message to chat log
         console.log('Saving user message to chat log');
-        await sessionsApi.saveUserMessage(conversationId, userMessage);
+        const userMessageResponse = await sessionsApi.saveUserMessage(conversationId, userMessage);
+        const chatLogId = userMessageResponse.data?.chat_log_id;
+        
+        if (!chatLogId) {
+          throw new Error('Failed to save user message - no chat log ID returned');
+        }
         
         // Use the RAG API if documents are selected and backend is available
         if (selectedDocIds.length > 0 && isBackendAvailable) {
@@ -1014,31 +1021,40 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             if (queryResponse && queryResponse.data && queryResponse.data.response) {
               console.log('AI response extracted:', queryResponse.data.response);
               addProcessStep('response', 'completed', 'AI response generated successfully');
+              
+              // The backend query API already handles saving the response to the same chat log
+              // No need to update it manually since the query API does this
             } else {
               console.error('Invalid response structure:', queryResponse);
               addProcessStep('response', 'error', 'Failed to generate AI response');
-              // Save a default response if AI doesn't respond
-              await sessionsApi.saveAIResponse(conversationId, "I'm having trouble processing your request right now. Please try again.");
+              
+              // Update chat log with error response
+              await sessionsApi.updateChatLogResponse(chatLogId, "I'm having trouble processing your request right now. Please try again.");
             }
           } catch (apiError) {
             console.error('API call failed:', apiError);
             addProcessStep('response', 'error', 'API call failed');
-            // Save an error response if the API fails
-            await sessionsApi.saveAIResponse(conversationId, "I'm sorry, I encountered an error while processing your request. Please try again.");
+            
+            // Update chat log with error response
+            await sessionsApi.updateChatLogResponse(chatLogId, "I'm sorry, I encountered an error while processing your request. Please try again.");
           }
         } else {
           // Fallback response when no documents are selected or backend unavailable
           addProcessStep('response', 'in-progress', 'Generating fallback response...');
           
+          let fallbackResponse = "";
           if (selectedDocIds.length === 0) {
             console.log("No documents selected, saving general response");
-            await sessionsApi.saveAIResponse(conversationId, "I'd be happy to help! Please upload some documents so I can provide more specific assistance, or ask me a general question.");
+            fallbackResponse = "I'd be happy to help! Please upload some documents so I can provide more specific assistance, or ask me a general question.";
             addProcessStep('response', 'completed', 'General response provided');
           } else {
             console.log("Backend unavailable, saving error response");
-            await sessionsApi.saveAIResponse(conversationId, "I'm currently unable to process your request. Please check your connection and try again.");
+            fallbackResponse = "I'm currently unable to process your request. Please check your connection and try again.";
             addProcessStep('response', 'error', 'Backend unavailable');
           }
+          
+          // Update chat log with fallback response
+          await sessionsApi.updateChatLogResponse(chatLogId, fallbackResponse);
         }
         
         // Add a small delay for data consistency
@@ -1230,7 +1246,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         addUploadStep('document', 'in-progress', 'Processing uploaded documents...');
       }
       
-      // Refresh documents to get the latest data
+      // Refresh documents to get the latest data and ensure immediate visibility
       await refreshDocuments();
       
       if (sessionIdToUse && uploadedDocumentIds.length > 0) {
@@ -1247,11 +1263,11 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           });
         }
         
-        // Add upload message to input for current conversation
-        const uploadMessage = generateUploadMessage(validFiles);
-        setInputValue(prev => prev + (prev ? '\n\n' : '') + uploadMessage);
-        
+        // NO AUTO-GENERATED MESSAGE - documents should appear immediately without message
         addUploadStep('document', 'completed', `${uploadedDocumentIds.length} document(s) processed successfully`);
+        
+        // Refresh documents again to ensure UI is updated
+        await refreshDocuments();
         
       } else if (uploadedDocumentIds.length > 0) {
         // No current conversation - automatically create a new chat with the uploaded documents
@@ -1272,15 +1288,13 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         
         addUploadStep('document', 'completed', `Auto-created chat: ${chatTitle}`);
         
-        // Prepare welcome message for the documents
-        const uploadMessage = generateUploadMessage(validFiles);
-        setInputValue(uploadMessage);
+        // NO AUTO-GENERATED MESSAGE - documents should appear immediately without message
         
         // Add a small delay to ensure data is committed
         await new Promise(resolve => setTimeout(resolve, 200));
         
-        // Refresh chats to show the new conversation
-        await refreshChats();
+        // Refresh both documents and chats to show the new conversation and documents
+        await Promise.all([refreshDocuments(), refreshChats()]);
         console.log('Auto-created chat refresh completed');
       }
       
