@@ -1,8 +1,8 @@
-import spacy
 import re
 import json
 import os
 from datetime import datetime
+from collections import defaultdict
 
 def save_mapping_to_file(entity_map: dict, filename: str = "entity_mappings.json"):
     """Save entity mappings to a JSON file with timestamp."""
@@ -46,6 +46,7 @@ def load_mapping_from_file(filename: str = "entity_mappings.json"):
     
     if not os.path.exists(file_path):
         return {}
+    
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -53,84 +54,76 @@ def load_mapping_from_file(filename: str = "entity_mappings.json"):
     except (json.JSONDecodeError, FileNotFoundError) as e:
         return {}
 
-# Load spaCy model once
-nlp = spacy.load("en_core_web_sm")
 
 def pii_masker_func(text: str) -> str:
-    """Mask PII-like content (money, percent, cardinal, ratios) in the input text."""
-
-    # Step 1 — spaCy NER
-    doc = nlp(text)
-    entity_counter = {
-        "CARDINAL": 0,
-        "MONEY": 0,
-        "PERCENT": 0,
-        "CURRENCY_RANGE": 0,
-        "RATIO": 0,
-        "PERCENT_POINT": 0
-    }
-    entity_map = {}
-    entities = []
-    existing_spans = []
-
-    for ent in doc.ents:
-        if ent.label_ in ["CARDINAL", "MONEY", "PERCENT"]:
-            ent_text = ent.text.strip()
-            ent_label = ent.label_
-
-            if ent_text not in entity_map:
-                entity_counter[ent_label] += 1
-                placeholder = f"[{ent_label}_{entity_counter[ent_label]}]"
-                entity_map[ent_text] = placeholder
-
-            entities.append({
-                'text': ent_text,
-                'label': ent_label,
-                'start': ent.start_char,
-                'end': ent.end_char
-            })
-            existing_spans.append((ent.start_char, ent.end_char))
-
-    # Step 2 — Regex patterns
-    regex_patterns = [
-        {"label": "CURRENCY_RANGE", "pattern": r"US?\s?\$?\s?\d+(?:\.\d+)?(?:–|-)\d+(?:\.\d+)?\s?(million|billion|M|B)"},
-        {"label": "RATIO", "pattern": r"(?:\d+|\d*\.\d+)x"},
-        {"label": "PERCENT", "pattern": r"[+-]?\d+(?:\.\d+)?%"},
-        {"label": "PERCENT_POINT", "pattern": r"[+-]?\d+(?:\.\d+)?\s?(ppt|ppts)"}
+    """Mask PII-like content (money, percent, ranges) using regex patterns."""
+    
+    # Load existing mappings to avoid duplicate placeholders
+    existing_mappings = load_mapping_from_file()
+    
+    # Define regex patterns in order of priority
+    patterns = [
+        (
+            r'('  # MONEY_RANGE
+            r'(?:\$|\u20b9|\u20ac|\u00a3)?\s?\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:M|B|K|million|billion|crore)?'
+            r')\s?[\u2013-]\s?('
+            r'(?:\$|\u20b9|\u20ac|\u00a3)?\s?\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:M|B|K|million|billion|crore)?'
+            r')', 'MONEY_RANGE'),
+        
+        (r'[+\-]?\d+(?:\.\d+)?\s?[\u2013-]\s?[+\-]?\d+(?:\.\d+)?\s?%', 'PERCENT_RANGE'),
+        (r'[+\-]?\d+(?:\.\d+)?\s?%', 'PERCENT'),
+        (r'(?:\$|\u20b9|\u20ac|\u00a3)?\s?\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:M|B|K|\s?million|\s?billion|\s?crore)?', 'MONEY')
     ]
 
-    for regex in regex_patterns:
-        for match in re.finditer(regex["pattern"], text):
-            ent_text = match.group(0)
-            ent_label = regex["label"]
-            start = match.start()
-            end = match.end()
+    entity_map = existing_mappings.copy()  # Start with existing mappings
+    
+    # Calculate current max counters for each label type
+    entity_counts = defaultdict(int)
+    for original_value, placeholder in existing_mappings.items():
+        # Extract label and number from placeholder like "[MONEY_5]"
+        if placeholder.startswith('[') and placeholder.endswith(']'):
+            parts = placeholder[1:-1].split('_')
+            if len(parts) == 2:
+                label, num_str = parts
+                try:
+                    num = int(num_str)
+                    entity_counts[label] = max(entity_counts[label], num)
+                except ValueError:
+                    continue
+    
+    occupied = [False] * len(text)
+    replacements = []
 
-            # prevent overlap
-            if any(not (end <= s or start >= e) for s, e in existing_spans):
+    # Process each pattern
+    for pattern, label in patterns:
+        for match in re.finditer(pattern, text):
+            span = match.span()
+            value = match.group().strip()
+            
+            # Skip if this span is already occupied
+            if any(occupied[i] for i in range(span[0], span[1])):
                 continue
+            
+            # Mark this span as occupied
+            for i in range(span[0], span[1]):
+                occupied[i] = True
+            
+            # Create placeholder if this value hasn't been seen before
+            if value not in entity_map:
+                entity_counts[label] += 1
+                placeholder = f"[{label}_{entity_counts[label]}]"
+                entity_map[value] = placeholder
+            
+            # Store replacement info
+            replacements.append((span, entity_map[value]))
 
-            if ent_text not in entity_map:
-                entity_counter[ent_label] += 1
-                placeholder = f"[{ent_label}_{entity_counter[ent_label]}]"
-                entity_map[ent_text] = placeholder
+    # Apply replacements from end to start to avoid position shifts
+    for (start, end), placeholder in sorted(replacements, reverse=True):
+        text = text[:start] + placeholder + text[end:]
 
-            entities.append({
-                'text': ent_text,
-                'label': ent_label,
-                'start': start,
-                'end': end
-            })
-            existing_spans.append((start, end))
-
-    # Step 3 — Replace from end to start
-    entities_sorted = sorted(entities, key=lambda x: x['start'], reverse=True)
-    for ent in entities_sorted:
-        start, end = ent['start'], ent['end']
-        text = text[:start] + entity_map[ent['text']] + text[end:]
-
-    # Step 4 — Save mappings to file
-    if entity_map:  # Only save if there are mappings
-        save_mapping_to_file(entity_map)
+    # Save mappings to file (only if new entities were found)
+    new_mappings = {k: v for k, v in entity_map.items() if k not in existing_mappings}
+    if new_mappings:
+        save_mapping_to_file(new_mappings)
 
     return text

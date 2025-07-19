@@ -11,6 +11,9 @@ async def create_chat_session(request: CreateSessionRequest):
     result = session_service.create_session(request.user_id, request.name)
     
     if result["success"]:
+        # Print statement to show new session creation
+        print(f"💬 New session created - Session ID: {result['session_id']}, User: {request.user_id}, Name: {request.name or 'Unnamed'}")
+        
         return SessionResponse(
             session_id=result["session_id"],
             user_id=result["user_id"],

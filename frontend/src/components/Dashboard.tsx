@@ -117,7 +117,12 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
               id: chat.id,
               content: chat.content || '',
               sender: chat.role === 'user' ? 'user' : 'ai' as const,
-              timestamp: new Date(chat.created_at)
+              // Ensure UTC parsing for created_at
+              timestamp: new Date(
+                typeof chat.created_at === 'string'
+                  ? chat.created_at.replace(' ', 'T').replace('+00', 'Z')
+                  : chat.created_at
+              )
             }));
 
         return {
@@ -609,7 +614,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         // Save an error response if the AI generation failed
         try {
           console.log('Saving error response to chat log');
-          await sessionsApi.saveAIResponse(newConversationId, "I'm sorry, I encountered an error while processing your request. Please try again.");
+          await sessionsApi.saveAIResponse(newConversationId, "Please upload a document to continue querying.");
         } catch (logError) {
           console.error('Failed to save error response:', logError);
         }
@@ -952,15 +957,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       setIsLoading(true);
 
       // Get all documents selected for this conversation
-      const chatData = conversations.find((conv: Conversation) => conv.id === conversationId);
-      // Deduplicate document IDs using Set to avoid duplicates
-      const selectedDocIds = [...new Set([
-        ...(chatData?.document_uuid || []),
-        ...selectedDocumentsForAnalysis
-      ])];
+      // Use only checked documents for analysis
+      const selectedDocIds = [...new Set(selectedDocumentsForAnalysis)];
 
-      console.log('Current conversation:', currentConv);
-      console.log('Document UUID from conversation:', currentConv?.document_uuid);
       console.log('Selected documents for analysis:', selectedDocumentsForAnalysis);
       console.log('All selected doc IDs:', selectedDocIds);
       console.log('Available documents:', uploadedFiles.map(f => ({ id: f.id, name: f.name })));
@@ -996,7 +995,6 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           
           try {
             // Step 3: Document retrieval
-            addProcessStep('enrich', 'completed', 'Query enriched successfully');
             addProcessStep('retrieve', 'in-progress', `Retrieving relevant content from ${selectedDocIds.length} documents...`);
             
             const queryResponse = await queryApi.submitQuery(queryRequest);
@@ -1011,8 +1009,72 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             addProcessStep('mask', 'completed', 'Privacy protection applied');
             addProcessStep('response', 'in-progress', 'Generating AI response...');
             
-            if (queryResponse && queryResponse.data && queryResponse.data.response) {
-              console.log('AI response extracted:', queryResponse.data.response);
+            if (queryResponse && queryResponse.data) {
+              const responseData: any = queryResponse.data;
+              console.log('AI response extracted:', responseData.scaled_response || responseData.response);
+              
+              // Add detailed transparency steps for ActivityLog
+              addProcessStep('transparency', 'in-progress', 'Processing response details...');
+              
+              // Add user query details (using correct property names)
+              addProcessStep('user_query', 'completed', `User Query: "${responseData.user_query || responseData.original_query || 'N/A'}"`);
+              
+              // Add transformed query details
+              const transformedQuery = responseData.transformed_query || responseData.enriched_query;
+              const userQuery = responseData.user_query || responseData.original_query;
+              if (transformedQuery && transformedQuery !== userQuery) {
+                addProcessStep('transformed_query', 'completed', `Transformed Query: "${transformedQuery}"`);
+              }
+              
+              // Add retrieved chunks info
+              const retrievedChunks = responseData.retrieved_chunks;
+              if (retrievedChunks && Array.isArray(retrievedChunks) && retrievedChunks.length > 0) {
+                addProcessStep('retrieved_chunks', 'completed', `Retrieved ${retrievedChunks.length} relevant chunks from documents`);
+                retrievedChunks.forEach((chunk: any, index: number) => {
+                  const chunkText = typeof chunk === 'string' ? chunk : chunk.content || chunk.text || 'No content';
+                  addProcessStep(`chunk_${index}`, 'completed', `Chunk ${index + 1}: "${chunkText.substring(0, 100)}..."`);
+                });
+              } else if (typeof retrievedChunks === 'string') {
+                addProcessStep('retrieved_chunks', 'completed', `Retrieved chunks: ${retrievedChunks}`);
+              } else {
+                addProcessStep('retrieved_chunks', 'completed', 'No chunks retrieved (no documents selected)');
+              }
+              
+              // Add masked chunks info
+              const maskedChunks = responseData.masked_chunks;
+              if (maskedChunks && Array.isArray(maskedChunks) && maskedChunks.length > 0) {
+                addProcessStep('masked_chunks', 'completed', `Applied privacy masking to ${maskedChunks.length} chunks`);
+              } else if (typeof maskedChunks === 'string') {
+                addProcessStep('masked_chunks', 'completed', `Masked chunks: ${maskedChunks}`);
+              }
+              
+              // Add response details (using correct property names)
+              const maskedResponse = responseData.maskedResponse || responseData.masked_response;
+              if (maskedResponse) {
+                addProcessStep('masked_response', 'completed', `Masked Response: "${maskedResponse}"`);
+              }
+              
+              const unmaskedResponse = responseData.unmasked_response;
+              if (unmaskedResponse && unmaskedResponse !== maskedResponse) {
+                addProcessStep('unmasked_response', 'completed', `Unmasked Response: "${unmaskedResponse}"`);
+              }
+              
+              const scaledResponse = responseData.scaled_response || responseData.response;
+              if (scaledResponse) {
+                addProcessStep('scaled_response', 'completed', `Final Response: "${scaledResponse}"`);
+              }
+              
+              const unscaledResponse = responseData.unscaled_response;
+              if (unscaledResponse && unscaledResponse !== scaledResponse) {
+                addProcessStep('unscaled_response', 'completed', `Unscaled Response: "${unscaledResponse}"`);
+              }
+              
+              // Add processed docs info
+              if (responseData.processed_docs && responseData.processed_docs.length > 0) {
+                addProcessStep('processed_docs', 'completed', `Processed ${responseData.processed_docs.length} documents: ${responseData.processed_docs.join(', ')}`);
+              }
+              
+              addProcessStep('transparency', 'completed', 'Response details processed for transparency');
               addProcessStep('response', 'completed', 'AI response generated successfully');
             } else {
               console.error('Invalid response structure:', queryResponse);
@@ -1024,7 +1086,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             console.error('API call failed:', apiError);
             addProcessStep('response', 'error', 'API call failed');
             // Save an error response if the API fails
-            await sessionsApi.saveAIResponse(conversationId, "I'm sorry, I encountered an error while processing your request. Please try again.");
+            await sessionsApi.saveAIResponse(conversationId, "Please upload a document to continue querying.");
           }
         } else {
           // Fallback response when no documents are selected or backend unavailable
@@ -1065,7 +1127,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         
         // Save error message to user
         try {
-          await sessionsApi.saveAIResponse(conversationId, "I'm sorry, I encountered an error while processing your request. Please try again.");
+          await sessionsApi.saveAIResponse(conversationId, "Please upload a document to continue querying.");
           await refreshChats();
         } catch (logError) {
           console.error('Failed to save error response:', logError);
@@ -1425,9 +1487,9 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                           <p className={`text-xs mt-1 ${
                             message.sender === 'user' 
                               ? 'text-blue-100 text-right' 
-                              : 'text-gray-500 text-left'
+                               : 'text-gray-500 text-left'
                           }`}>
-                            {message.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            {message.timestamp.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
                           </p>
                         </div>
                       </div>

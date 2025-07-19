@@ -39,6 +39,50 @@ async def process_query(request: QueryRequest):
                 }
             )
         
+        # Check if RAG pipeline is initialized
+        if rag_pipeline is None:
+            raise HTTPException(
+                status_code=503, 
+                detail="RAG pipeline not initialized. Please check server configuration."
+            )
+        
+        # Handle empty doc_ids - return appropriate response
+        if not request.doc_ids or len(request.doc_ids) == 0:
+            # Save general query response to chat log
+            general_response = "I'd be happy to help! Please select some documents using the checkboxes in the sidebar so I can provide specific information from your documents."
+            
+            chat_log_result = session_service.save_chat_log(
+                session_id=request.session_id,
+                prompt=request.query,
+                response=general_response
+            )
+            
+            response_data = {
+                "status": "success",
+                "session_id": request.session_id,
+                "user_query": request.query,
+                "transformed_query": request.query,
+                "retrieved_chunks": [],
+                "masked_chunks": [],
+                "maskedResponse": general_response,
+                "unmasked_response": general_response,
+                "phase2": "",
+                "scaled_response": general_response,
+                "unscaled_response": general_response,
+                "retrieved_metadata": [],
+                "processed_docs": []
+            }
+            
+            if chat_log_result["success"]:
+                response_data["chat_log_id"] = chat_log_result["chat_log_id"]
+            else:
+                response_data["warning"] = "Query processed successfully but failed to save chat log"
+            
+            return JSONResponse(
+                status_code=200,
+                content=response_data
+            )
+        
         # Process the query through RAG pipeline
         result = rag_pipeline.process_query(
             query=request.query,
@@ -48,20 +92,25 @@ async def process_query(request: QueryRequest):
         )
         
         if result["status"] == "success":
-            # Save only the AI response to database (user prompt is saved separately by frontend)
-            chat_log_result = session_service.save_ai_response(
+            # Save chat log to database
+            chat_log_result = session_service.save_chat_log(
                 session_id=request.session_id,
-                response=result["response"]
+                prompt=request.query,
+                response=result["scaled_response"]  # Use scaled_response instead of response
             )
             
             response_data = {
                 "status": result["status"],
                 "session_id": request.session_id,
-                "original_query": result["original_query"],
-                "enriched_query": result["enriched_query"],
+                "user_query": result["original_query"],
+                "transformed_query": result["enriched_query"],
                 "retrieved_chunks": result["retrieved_chunks"],
                 "masked_chunks": result["masked_chunks"],
-                "response": result["response"],
+                "maskedResponse": result["maskedResponse"],
+                "unmasked_response": result["unmasked_response"], 
+                "phase2": result["phase2"],
+                "scaled_response": result["scaled_response"],
+                "unscaled_response": result["unscaled_response"],
                 "retrieved_metadata": result["retrieved_metadata"],
                 "processed_docs": result["processed_docs"]
             }

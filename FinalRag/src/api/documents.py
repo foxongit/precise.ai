@@ -29,6 +29,12 @@ def process_document_background(file_path: str, user_id: str, doc_id: str, filen
         upload_successful = document_service.upload_file_to_storage(file_path, storage_path)
         
         if upload_successful:
+            # Check if RAG pipeline is initialized
+            if rag_pipeline is None:
+                document_service.update_document_status(doc_id, "failed", "RAG pipeline not initialized")
+                document_service.delete_from_storage(storage_path)
+                return
+            
             # Add to RAG system
             result = rag_pipeline.add_document(
                 pdf_path=file_path,
@@ -49,6 +55,7 @@ def process_document_background(file_path: str, user_id: str, doc_id: str, filen
                 
                 if document_service.save_document_to_supabase(doc_data):
                     # Link document to session via document_sessions table
+                    print(f"Linking document {doc_id} to session {session_id}")
                     session_service.link_document_to_session(doc_id, session_id)
                     document_service.update_document_status(
                         doc_id, 
@@ -83,6 +90,12 @@ def process_document_background_test(file_path: str, user_id: str, doc_id: str, 
         
         print(f"Processing document: {filename}")
         
+        # Check if RAG pipeline is initialized
+        if rag_pipeline is None:
+            document_service.update_document_status(doc_id, "failed", "RAG pipeline not initialized")
+            document_service.cleanup_local_file(file_path)
+            return
+        
         # Add to RAG system directly
         result = rag_pipeline.add_document(
             pdf_path=file_path,
@@ -104,6 +117,9 @@ def process_document_background_test(file_path: str, user_id: str, doc_id: str, 
             
             print(f"Saving document metadata: {doc_data}")
             if document_service.save_document_to_supabase(doc_data):
+                # Link document to session via document_sessions table
+                print(f"Linking document {doc_id} to session {session_id}")
+                session_service.link_document_to_session(doc_id, session_id)
                 document_service.update_document_status(
                     doc_id, 
                     "completed", 
@@ -133,6 +149,9 @@ async def upload_document(
 ):
     """Upload and process a PDF document asynchronously"""
     
+    # Print statement to show when document is uploaded
+    print(f"📄 Document upload started - User: {user_id}, Session: {session_id}, File: {file.filename}")
+    
     # Validate file type
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
@@ -148,6 +167,8 @@ async def upload_document(
     # Save uploaded file temporarily
     upload_date = datetime.now().isoformat()
     file_path = os.path.join(settings.UPLOAD_DIR, f"{user_id}_{session_id}_{doc_id}_{file.filename}")
+    
+    print(f"💾 Saving file to: {file_path}")
     
     try:
         # Save file first
@@ -182,7 +203,6 @@ async def upload_document(
         )
             
     except Exception as e:
-        # Clean up file on error
         document_service.cleanup_local_file(file_path)
         raise HTTPException(status_code=500, detail=f"Error uploading document: {str(e)}")
 
@@ -290,52 +310,58 @@ async def delete_document(user_id: str, doc_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")
 
-@router.delete("/{doc_id}")
-async def delete_document(doc_id: str, user_id: str):
-    """Delete a document and all its associated data"""
-    
-    result = document_service.delete_document(doc_id, user_id)
-    
-    if result["success"]:
-        return {"message": "Document deleted successfully"}
-    else:
-        raise HTTPException(status_code=500, detail=result["error"])
-
 @router.get("/{user_id}/{doc_id}/status")
 async def get_document_status(user_id: str, doc_id: str):
     """Get the processing status of a document"""
     
-    # First try to get status from document service
-    status = document_service.get_document_status(doc_id)
+    status_info = document_service.get_document_status(doc_id)
     
-    if status:
+    if status_info is None:
+        raise HTTPException(status_code=404, detail="Document not found or status not available")
+    
+    return {
+        "doc_id": doc_id,
+        "user_id": user_id,
+        "status": status_info["status"],
+        "message": status_info["message"],
+        "chunks_added": status_info.get("chunks_added", 0),
+        "timestamp": status_info["timestamp"],
+        "is_ready": status_info["status"] == "completed"
+    }
+
+@router.get("/debug/{user_id}/{doc_id}/chunks")
+async def get_document_chunks(user_id: str, doc_id: str, query: str = "test", k: int = 4):
+    """Debug endpoint to see raw chunks from a document"""
+    
+    try:
+        # Get retriever for the document
+        retriever = rag_pipeline.document_manager.get_retriever_for_docs([doc_id], user_id, k)
+        
+        if retriever is None:
+            raise HTTPException(status_code=404, detail="Document not found or not processed")
+        
+        # Get chunks
+        results = retriever.get_relevant_documents(query)
+        
+        chunks_info = []
+        for i, doc in enumerate(results):
+            chunks_info.append({
+                "chunk_number": i + 1,
+                "content": doc.page_content,
+                "metadata": doc.metadata
+            })
+        
         return {
             "doc_id": doc_id,
             "user_id": user_id,
-            "status": status["status"],
-            "message": status["message"],
-            "chunks_added": status.get("chunks_added", 0),
-            "timestamp": status["timestamp"],
-            "is_ready": status["status"] == "completed"
+            "query": query,
+            "total_chunks": len(chunks_info),
+            "chunks": chunks_info
         }
-    
-    # If not in document service memory, check if document exists in the database
-    try:
-        # First check if the document exists at all
-        document = document_service.get_document(doc_id)
         
-        if document:
-            # Optionally verify it's associated with the user
-            # This is less strict - if the document exists, assume it's ready
-            return {
-                "doc_id": doc_id,
-                "user_id": user_id,
-                "status": "completed",
-                "message": "Document processed successfully",
-                "chunks_added": 0,  # We don't know how many chunks since status was lost
-                "timestamp": document.get("updated_at") or document.get("upload_date") or datetime.now().isoformat(),
-                "is_ready": True
-            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving chunks: {str(e)}")
+    
     except Exception as e:
         print(f"Error checking document in database: {str(e)}")
     
